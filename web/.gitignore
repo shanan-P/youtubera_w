@@ -1,0 +1,12 @@
+# This file specifies which files and directories should be ignored by Git.
+# It's used to prevent files that are generated during development or that contain sensitive information from being committed to the repository.
+node_modules
+build
+.cache
+.vercel
+.netlify
+.turbo
+.env
+.env.*
+!.env.example
+.DS_Store

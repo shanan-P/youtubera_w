@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String             @id @default(uuid())
+  username         String             @unique
+  email            String             @unique
+  passwordHash     String?
+  role             Role               @default(learner)
+  isVerified       Boolean            @default(false)
+  profilePicture   String?
+  bio              String?
+  githubId         String?            @unique
+  googleId         String?            @unique
+  phone            String?
+  isProfilePublic  Boolean            @default(true)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  certificates     Certificate[]
+  courses          Course[]           @relation("UserCourses")
+  followers        Follow[]           @relation("FollowsFollowee")
+  follows          Follow[]           @relation("FollowsFollower")
+  activities       LearningActivity[]
+  posts            Post[]
+  receivedMessages PrivateMessage[]   @relation("ReceivedMessages")
+  sentMessages     PrivateMessage[]   @relation("SentMessages")
+  progresses       UserProgress[]
+}
+
+model Course {
+  id            String             @id @default(uuid())
+  title         String
+  description   String?
+  contentType   ContentType
+  youtuberName  String?
+  channelName   String?
+  authorName    String?
+  thumbnailUrl  String?
+  sourceUrl     String?
+  filePath      String?
+  totalDuration Int?
+  totalPages    Int?
+  createdById   String?
+  createdAt     DateTime           @default(now())
+  textContent   String?
+  processingType ProcessingType?
+  certificates  Certificate[]
+  chapters      Chapter[]
+  createdBy     User?              @relation("UserCourses", fields: [createdById], references: [id])
+  activities    LearningActivity[]
+  posts         Post[]
+  formattedVersions FormattedVersion[]
+  search_vector     Unsupported("tsvector")?
+}
+
+model FormattedVersion {
+  id        String   @id @default(cuid())
+  courseId  String
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  content   String
+  version   Int
+  createdAt DateTime @default(now())
+
+  @@unique([courseId, version])
+}
+
+model Chapter {
+  id                String             @id @default(uuid())
+  courseId          String
+  title             String
+  contentType       ChapterContentType
+  originalContentId String?
+  pageStart         Int?
+  pageEnd           Int?
+  orderIndex        Int?
+  createdAt         DateTime           @default(now())
+  course            Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  shortVideos       ShortVideo[]
+  textSections      TextSection[]
+}
+
+model ShortVideo {
+  id             String          @id @default(uuid())
+  chapterId      String
+  title          String
+  duration       Int?
+  videoUrl       String
+  downloadUrl    String?
+  thumbnailUrl   String?
+  startTime      Int?
+  endTime        Int?
+  processingType ProcessingType?
+  customQuery    String?
+  relevanceScore Float?
+  orderIndex     Int?
+  createdAt      DateTime        @default(now())
+  chapter        Chapter         @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@index([chapterId])
+}
+
+model TextSection {
+  id             String         @id @default(uuid())
+  chapterId      String
+  title          String
+  content        String
+  pageNumbers    Int[]
+  processingType ProcessingType @default(ai)
+  orderIndex     Int?
+  createdAt      DateTime       @default(now())
+  chapter        Chapter        @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@index([chapterId])
+}
+
+model UserProgress {
+  id             String             @id @default(uuid())
+  userId         String
+  contentId      String
+  contentType    ChapterContentType
+  progressValue  Int                @default(0)
+  isCompleted    Boolean            @default(false)
+  processingType ProcessingType?
+  lastAccessed   DateTime           @default(now())
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contentId, contentType, processingType])
+}
+
+model Follow {
+  id         String   @id @default(uuid())
+  followerId String
+  followeeId String
+  createdAt  DateTime @default(now())
+  followee   User     @relation("FollowsFollowee", fields: [followeeId], references: [id], onDelete: Cascade)
+  follower   User     @relation("FollowsFollower", fields: [followerId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followeeId])
+}
+
+model Post {
+  id          String   @id @default(uuid())
+  userId      String
+  courseId    String
+  content     String
+  isModerated Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PrivateMessage {
+  id          String   @id @default(uuid())
+  senderId    String
+  receiverId  String
+  content     String
+  isEncrypted Boolean  @default(true)
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  receiver    User     @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  sender      User     @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+}
+
+model LearningActivity {
+  id           String   @id @default(uuid())
+  userId       String
+  activityType String
+  courseId     String?
+  points       Int      @default(0)
+  createdAt    DateTime @default(now())
+  course       Course?  @relation(fields: [courseId], references: [id])
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Certificate {
+  id             String   @id @default(uuid())
+  userId         String
+  courseId       String
+  certificateUrl String?
+  issuedAt       DateTime @default(now())
+  course         Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum Role {
+  learner
+  youtuber
+  admin
+}
+
+enum ContentType {
+  youtube_playlist
+  youtube_video
+  youtube_text
+  uploaded_video
+  pdf_textbook
+  audiobook
+  audiobook_text
+}
+
+enum ChapterContentType {
+  video
+  pdf
+  audio
+}
+
+enum ProcessingType {
+  ai
+  chapter
+  custom
+}

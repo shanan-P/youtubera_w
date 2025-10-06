@@ -1,0 +1,18 @@
+# Dependency directories
+/node_modules/
+
+# Vendor code and SDKs
+/PDFServicesSDK-Node.jsSamples/
+
+# Large media files
+*.mp4
+*.flac
+*.wav
+
+# Local files
+Screenshot*.png
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
