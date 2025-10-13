@@ -121,84 +121,243 @@ export async function createPdfFromHtml(htmlContent: string, outputPath: string,
 
 export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ absPath: string; relPath: string, content: string, article: ReadabilityArticle | null }> {
   console.log(`[saveTxtFromUrl] Starting to process URL: ${url}`);
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    },
-  });
-  console.log(`[saveTxtFromUrl] Fetched URL with status: ${res.status}`);
-  if (!res.ok) {
-    console.error(`[saveTxtFromUrl] Failed to download content from URL (${res.status})`);
-    throw new Error(`Failed to download content from URL (${res.status})`);
-  }
 
-  const contentType = res.headers.get("content-type") || "";
-  console.log(`[saveTxtFromUrl] Content-Type: ${contentType}`);
+  const maxRetries = 3;
+  const retryDelay = 2000; // 2 seconds
 
-  let textContent = '';
-  let article: ReadabilityArticle | null = null;
-
-  if (contentType.includes("application/pdf")) {
-    console.log('[saveTxtFromUrl] Content is PDF, downloading and extracting text.');
-    const dir = getPdfStorageDir(courseId); // temp dir for pdf
-    await ensureDir(dir);
-    const pdfPath = getPdfFilePath(courseId);
-    const buf = Buffer.from(await res.arrayBuffer());
-    await fs.writeFile(pdfPath, buf);
-    
-    console.log(`[saveTxtFromUrl] Saved temporary PDF to ${pdfPath}, extracting text with Adobe.`);
-    const adobeResult = await extractTextFromPdfWithAdobe(pdfPath);
-
-    if (adobeResult.error) {
-      console.error('[saveTxtFromUrl] Adobe extraction failed:', adobeResult.error);
-      textContent = "";
-    } else {
-      textContent = adobeResult.text || "";
-    }
-    
-    console.log(`[saveTxtFromUrl] Extracted ${textContent.length} characters from PDF using Adobe.`);
-    // clean up the temp pdf
-    await fs.unlink(pdfPath);
-
-  } else if (contentType.includes("text/html") || !contentType) {
-    console.log('[saveTxtFromUrl] Content is HTML, attempting to extract article.');
-    const html = await res.text();
-    const doc = new JSDOM(html, { url });
-    if (isProbablyReaderable(doc.window.document)) {
-        const reader = new Readability(doc.window.document);
-        article = reader.parse() as ReadabilityArticle;
-        if (article) {
-            textContent = article.content; // Keep HTML content
-            console.log(`[saveTxtFromUrl] Readability extracted article successfully. Length: ${textContent.length}`);
-        } else {
-            console.warn('[saveTxtFromUrl] Readability failed to parse the article. Using empty content.');
-            textContent = '';
-        }
-    } else {
-        console.warn('[saveTxtFromUrl] Page is not considered readerable. Falling back to body content.');
-        textContent = doc.window.document.body.innerHTML;
-    }
-  } else {
-    console.warn(`[saveTxtFromUrl] Unsupported content type: ${contentType}. Trying to read as text.`);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      textContent = await res.text();
-    } catch (e) {
-      console.error(`[saveTxtFromUrl] Could not read content as text for unsupported type: ${contentType}`, e);
-      textContent = '';
+      console.log(`[saveTxtFromUrl] Attempt ${attempt}/${maxRetries} - Fetching URL`);
+
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+          "Accept-Encoding": "gzip, deflate, br",
+          "DNT": "1",
+          "Connection": "keep-alive",
+          "Upgrade-Insecure-Requests": "1",
+          "Sec-Fetch-Dest": "document",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Site": "none",
+          "Cache-Control": "max-age=0"
+        },
+        // Add timeout to prevent hanging
+        signal: AbortSignal.timeout(30000) // 30 seconds timeout
+      });
+
+      console.log(`[saveTxtFromUrl] Fetched URL with status: ${res.status}`);
+      if (!res.ok) {
+        if (attempt === maxRetries) {
+          console.error(`[saveTxtFromUrl] Failed to download content from URL after ${maxRetries} attempts (${res.status})`);
+          throw new Error(`Failed to download content from URL (${res.status})`);
+        }
+        console.log(`[saveTxtFromUrl] Retrying in ${retryDelay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        continue;
+      }
+
+      const contentType = res.headers.get("content-type") || "";
+      console.log(`[saveTxtFromUrl] Content-Type: ${contentType}`);
+
+      let textContent = '';
+      let article: ReadabilityArticle | null = null;
+
+      if (contentType.includes("application/pdf")) {
+        console.log('[saveTxtFromUrl] Content is PDF, downloading and extracting text.');
+        const dir = getPdfStorageDir(courseId);
+        await ensureDir(dir);
+        const pdfPath = getPdfFilePath(courseId);
+        const buf = Buffer.from(await res.arrayBuffer());
+        await fs.writeFile(pdfPath, buf);
+
+        console.log(`[saveTxtFromUrl] Saved temporary PDF to ${pdfPath}, extracting text with Adobe.`);
+        const adobeResult = await extractTextFromPdfWithAdobe(pdfPath);
+
+        if (adobeResult.error) {
+          console.error('[saveTxtFromUrl] Adobe extraction failed:', adobeResult.error);
+          textContent = "";
+        } else {
+          textContent = adobeResult.text || "";
+        }
+
+        console.log(`[saveTxtFromUrl] Extracted ${textContent.length} characters from PDF using Adobe.`);
+        await fs.unlink(pdfPath);
+
+      } else if (contentType.includes("text/html") || !contentType) {
+        console.log('[saveTxtFromUrl] Content is HTML, attempting to extract article.');
+        const html = await res.text();
+
+        // Add a small delay to allow for any dynamic content loading
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const doc = new JSDOM(html, { url });
+
+        // Check if page is readable with more lenient criteria
+        const isReadable = isProbablyReaderable(doc.window.document) ||
+          doc.window.document.querySelector('article') !== null ||
+          doc.window.document.querySelector('.article-content') !== null ||
+          doc.window.document.querySelector('.post-content') !== null ||
+          doc.window.document.querySelector('main') !== null;
+
+        console.log(`[saveTxtFromUrl] Is page probably readable? ${isReadable}`);
+
+        if (isReadable) {
+          // Configure Readability with better options for technical articles
+          const reader = new Readability(doc.window.document, {
+            // Try to preserve more content
+            charThreshold: 100,
+            // Better handling of code blocks and formatting
+            classesToPreserve: ['highlight', 'code', 'pre', 'syntax-highlight', 'prettyprint']
+          });
+          article = reader.parse() as ReadabilityArticle;
+        }
+
+        if (article && article.content && article.content.trim().length > 200) {
+          textContent = article.content; // Keep HTML content for formatting
+          console.log(`[saveTxtFromUrl] Readability extracted article successfully. Length: ${textContent.length}`);
+          console.log(`[saveTxtFromUrl] Title: ${article.title || 'No title extracted'}`);
+        } else {
+          console.warn('[saveTxtFromUrl] Readability failed or content too short, using fallback extraction.');
+          textContent = await extractContentWithFallback(doc, url);
+        }
+      } else {
+        console.warn(`[saveTxtFromUrl] Unsupported content type: ${contentType}. Trying to read as text.`);
+        try {
+          textContent = await res.text();
+        } catch (e) {
+          console.error(`[saveTxtFromUrl] Could not read content as text for unsupported type: ${contentType}`, e);
+          textContent = '';
+        }
+      }
+
+      // If after all attempts, textContent is still empty or too short, we consider it a failure for this attempt.
+      if (!textContent || textContent.trim().length < 100) {
+        console.warn(`[saveTxtFromUrl] Attempt ${attempt} failed: Extracted content is too short or empty.`);
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+          continue; // Move to the next retry attempt
+        } else {
+          throw new Error('Failed to extract meaningful content from URL after multiple retries.');
+        }
+      }
+
+      // Clean up the extracted content
+      textContent = cleanExtractedContent(textContent);
+
+      // Now, save the textContent to a .txt file.
+      const txtDir = getTxtStorageDir(courseId);
+      await ensureDir(txtDir);
+      const txtAbsPath = getTxtFilePath(courseId);
+      console.log(`[saveTxtFromUrl] Saving extracted text (length: ${textContent.length}) to ${txtAbsPath}`);
+      await fs.writeFile(txtAbsPath, textContent);
+      const txtRelPath = path.posix.join("/downloads", "texts", courseId, "source.txt");
+      console.log(`[saveTxtFromUrl] Saved text file to ${txtAbsPath}`);
+
+      return { absPath: txtAbsPath, relPath: txtRelPath, content: textContent, article };
+
+    } catch (error) {
+      console.error(`[saveTxtFromUrl] Attempt ${attempt} failed:`, error);
+
+      if (attempt === maxRetries) {
+        console.error(`[saveTxtFromUrl] All ${maxRetries} attempts failed`);
+        throw error;
+      }
+
+      console.log(`[saveTxtFromUrl] Retrying in ${retryDelay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
   }
 
-  // Now, save the textContent to a .txt file.
-  console.log(`[saveTxtFromUrl] Saving extracted text to .txt file.`);
-  const txtDir = getTxtStorageDir(courseId);
-  await ensureDir(txtDir);
-  const txtAbsPath = getTxtFilePath(courseId);
-  await fs.writeFile(txtAbsPath, textContent);
-  const txtRelPath = path.posix.join("/downloads", "texts", courseId, "source.txt");
-  console.log(`[saveTxtFromUrl] Saved text file to ${txtAbsPath}`);
+  throw new Error(`Failed to process URL after ${maxRetries} attempts`);
+}
 
-  return { absPath: txtAbsPath, relPath: txtRelPath, content: textContent, article };
+// Fallback content extraction method
+async function extractContentWithFallback(doc: any, url: string): Promise<string> {
+  console.log('[extractContentWithFallback] Attempting fallback content extraction');
+
+  try {
+    // Try multiple selectors for article content
+    const contentSelectors = [
+      'article',
+      '.article-content',
+      '.post-content',
+      '.entry-content',
+      '.content',
+      'main',
+      '.main-content',
+      '.post-body',
+      '.article-body',
+      '.blog-content',
+      '.tutorial-content',
+      '.geeksforgeeks-content' // GeeksforGeeks specific
+    ];
+
+    for (const selector of contentSelectors) {
+      const element = doc.window.document.querySelector(selector);
+      if (element && element.innerHTML && element.innerHTML.trim().length > 200) {
+        console.log(`[extractContentWithFallback] Found content with selector: ${selector}`);
+        return element.innerHTML;
+      }
+    }
+
+    // Try to find content by common article patterns
+    const articleElements = doc.window.document.querySelectorAll('div[class*="article"], div[class*="content"], div[class*="post"]');
+    for (const element of articleElements) {
+      if (element.innerHTML && element.innerHTML.length > 500) {
+        console.log(`[extractContentWithFallback] Found content in div with article-like class`);
+        return element.innerHTML;
+      }
+    }
+
+    // Final fallback: try to extract from body, removing navigation and footer
+    const body = doc.window.document.body;
+    if (body) {
+      // Remove common non-content elements
+      const elementsToRemove = body.querySelectorAll('nav, header, footer, .nav, .header, .footer, .sidebar, .advertisement, .ads, script, style');
+      for (const el of elementsToRemove) {
+        el.remove();
+      }
+
+      const remainingContent = body.innerHTML;
+      if (remainingContent && remainingContent.length > 200) {
+        console.log(`[extractContentWithFallback] Using cleaned body content`);
+        return remainingContent;
+      }
+    }
+
+    console.warn('[extractContentWithFallback] No suitable content found with any method');
+    return '';
+
+  } catch (error) {
+    console.error('[extractContentWithFallback] Error during fallback extraction:', error);
+    return '';
+  }
+}
+
+// Clean up extracted content
+function cleanExtractedContent(content: string): string {
+  if (!content) return '';
+
+  return content
+    // Remove excessive whitespace
+    .replace(/\s+/g, ' ')
+    // Remove script and style tags
+    .replace(/<script[^>]*>.*?<\/script>/gi, '')
+    .replace(/<style[^>]*>.*?<\/style>/gi, '')
+    // Clean up common artifacts
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    // Remove tracking pixels and small images
+    .replace(/<img[^>]*width=["']1["'][^>]*>/gi, '')
+    .replace(/<img[^>]*height=["']1["'][^>]*>/gi, '')
+    // Clean up excessive line breaks
+    .replace(/\n\s*\n\s*\n/g, '\n\n')
+    .trim();
 }
 
 export async function saveUploadedPdf(file: File, courseId:string) {
