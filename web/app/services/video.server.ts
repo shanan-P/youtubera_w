@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { randomUUID } from 'crypto';
 import { dirname, join, resolve as resolvePath, basename } from "node:path";
@@ -201,9 +201,20 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   const cookiesFile = process.env.YTDLP_COOKIES_FILE || detectCookiesFile();
   if (cookiesFile && existsSync(cookiesFile)) {
     console.log(`[yt-dlp] Using cookies file: ${cookiesFile}`);
+    console.log(`[yt-dlp] Cookies file format check:`);
+    try {
+      const cookiesContent = readFileSync(cookiesFile, 'utf8');
+      const lines = cookiesContent.split('\n');
+      console.log(`[yt-dlp] First line: ${lines[0] || 'empty'}`);
+      console.log(`[yt-dlp] YouTube cookies count: ${cookiesContent.split('youtube.com').length - 1}`);
+      console.log(`[yt-dlp] Total cookies: ${lines.filter((line: string) => line.trim() && !line.startsWith('#')).length}`);
+    } catch (error) {
+      console.log(`[yt-dlp] Error reading cookies file: ${error instanceof Error ? error.message : String(error)}`);
+    }
     common.push("--cookies", cookiesFile);
   } else {
     console.log("[yt-dlp] No cookies file found - YouTube may require authentication");
+    console.log(`[yt-dlp] Checked paths: ${process.env.YTDLP_COOKIES_FILE || 'env var not set'}`);
   }
   const cookiesFromBrowser = process.env.YTDLP_COOKIES_FROM_BROWSER;
   if (!cookiesFile && cookiesFromBrowser) {

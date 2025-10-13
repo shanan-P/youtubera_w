@@ -50,8 +50,27 @@ for location in "${COOKIE_LOCATIONS[@]}"; do
     echo "Cookies file copied to .cookies/cookies.txt"
     COOKIE_FOUND=true
     break
+  else
+    echo "No cookies file found at $location"
   fi
 done
+
+# Debug: Check if cookies file was created and show its format
+echo "=== Debugging cookies file ==="
+if [ -f ".cookies/cookies.txt" ]; then
+  echo "Cookies file exists at .cookies/cookies.txt"
+  echo "First few lines of cookies file:"
+  head -5 .cookies/cookies.txt
+  echo "Last few lines of cookies file:"
+  tail -5 .cookies/cookies.txt
+  echo "Total lines in cookies file:"
+  wc -l < .cookies/cookies.txt
+  echo "Checking if cookies file has youtube.com domain:"
+  grep -c "youtube.com" .cookies/cookies.txt || echo "No youtube.com cookies found"
+  echo "================================"
+else
+  echo "Cookies file NOT found at .cookies/cookies.txt"
+fi
 
 if [ "$COOKIE_FOUND" = false ]; then
   echo "No cookies file found in any of the expected locations:"
