@@ -99,33 +99,6 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   };
   error?: string;
 }> {
-  // Try to get metadata first (ignore any local yt-dlp config)
-  const metaRes = await runYtDlp(["--ignore-config", "--no-playlist", "-J", url], 15000);
-  let info: any | null = null;
-  if (metaRes.ok) {
-    try {
-      info = JSON.parse(metaRes.stdout);
-    } catch {}
-  }
-
-  const id = info?.id || randomUUID();
-  const outDir = getWritableDir("videos", id);
-  const outFile = join(outDir, `${id}.mp4`);
-
-  // If already downloaded, return immediately
-  if (existsSync(outFile)) {
-    const publicUrl = `/.tmp/videos/${id}/${id}.mp4`; // Not web-accessible by default
-    const metadata = {
-      title: info?.title ?? "Unknown",
-      description: info?.description ?? "",
-      duration: info?.duration ?? null,
-      uploader: info?.uploader ?? "",
-      uploadDate: info?.upload_date ?? "",
-      thumbnailUrl: info?.thumbnail ?? ""
-    };
-    return { ok: true, videoPath: outFile, publicUrl, metadata };
-  }
-
   // Common hardening flags for YouTube to avoid 403s and improve stability
   const common: string[] = [
     "--ignore-config",
@@ -161,6 +134,38 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   const ytClient = process.env.YTDLP_YOUTUBE_CLIENT || "web"; // e.g., web, android, tv
   if (ytClient) {
     common.push("--extractor-args", `youtube:player_client=${ytClient}`);
+  }
+
+  // Try to get metadata first, now with cookie support
+  const metaRes = await runYtDlp([...common, "-J", url], 15000);
+  let info: any | null = null;
+  if (metaRes.ok) {
+    try {
+      info = JSON.parse(metaRes.stdout);
+    } catch {}
+  } else {
+    // If metadata fails, we cannot proceed.
+    const err = metaRes.stderr || metaRes.stdout || "yt-dlp metadata fetch failed";
+    console.warn("[yt-dlp] metadata fetch failed:", err);
+    return { ok: false, error: err };
+  }
+
+  const id = info?.id || randomUUID();
+  const outDir = getWritableDir("videos", id);
+  const outFile = join(outDir, `${id}.mp4`);
+
+  // If already downloaded, return immediately
+  if (existsSync(outFile)) {
+    const publicUrl = `/.tmp/videos/${id}/${id}.mp4`; // Not web-accessible by default
+    const metadata = {
+      title: info?.title ?? "Unknown",
+      description: info?.description ?? "",
+      duration: info?.duration ?? null,
+      uploader: info?.uploader ?? "",
+      uploadDate: info?.upload_date ?? "",
+      thumbnailUrl: info?.thumbnail ?? ""
+    };
+    return { ok: true, videoPath: outFile, publicUrl, metadata };
   }
 
   // Attempt 1: prefer progressive MP4 to reduce fragmented stream issues
