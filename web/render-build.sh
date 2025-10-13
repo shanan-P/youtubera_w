@@ -16,6 +16,10 @@ chmod a+rx ./.bin/yt-dlp
 #    Render's native environments are Debian-based, so we can use apt-get.
 apt-get update && apt-get install -y ffmpeg
 
+# 5. Set the absolute path for the yt-dlp binary
+#    This ensures we use our downloaded version, not a system-wide old one.
+export YTDLP_PATH="$RENDER_PROJECT_ROOT/.bin/yt-dlp"
+
 # 5. Run Prisma migrations and build the application
 npx prisma migrate deploy
 npm run build
