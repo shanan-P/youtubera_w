@@ -131,7 +131,11 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   if (cookiesFile || cookiesFromBrowser) {
     const cookieDir = getWritableDir("cookies");
     const cookieJarPath = join(cookieDir, "cookies.txt");
-    common.push("--cookie-jar", cookieJarPath);
+    // Only add cookie-jar if cookiesFromBrowser is set (for updating cookies)
+    // Don't add cookie-jar when using a static cookies file as it may not be supported
+    if (cookiesFromBrowser && !cookiesFile) {
+      common.push("--cookie-jar", cookieJarPath);
+    }
   }
   // Force a modern web client by default to avoid "not available on this app" issues
   const ytClient = process.env.YTDLP_YOUTUBE_CLIENT || "web"; // e.g., web, android, tv
