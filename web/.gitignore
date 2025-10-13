@@ -12,3 +12,4 @@ build
 .DS_Store
 public/downloads/*
 public/uploads/*
+!public/downloads/temp/*
