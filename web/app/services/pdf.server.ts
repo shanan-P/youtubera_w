@@ -34,20 +34,14 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
-export function getPdfStorageDir(courseId: string) {
-  return path.join(process.cwd(), "public", "downloads", "pdfs", courseId);
+function getWritableDir(...paths: string[]) {
+  const dir = path.resolve(process.cwd(), ".tmp", ...paths);
+  ensureDir(dir);
+  return dir;
 }
 
-export function getPdfFilePath(courseId: string) {
-  return path.join(getPdfStorageDir(courseId), "source.pdf");
-}
-
-export function getTxtStorageDir(courseId: string) {
-  return path.join(process.cwd(), "public", "downloads", "texts", courseId);
-}
-
-export function getTxtFilePath(courseId: string) {
-  return path.join(getTxtStorageDir(courseId), "source.txt");
+function getWritableFilePath(courseId: string, subfolder: "pdfs" | "texts", extension: "pdf" | "txt") {
+  return path.join(getWritableDir(subfolder, courseId), `source.${extension}`);
 }
 
 export async function createPdfFromHtml(htmlContent: string, outputPath: string, theme: string) {
@@ -166,9 +160,8 @@ export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ a
 
       if (contentType.includes("application/pdf")) {
         console.log('[saveTxtFromUrl] Content is PDF, downloading and extracting text.');
-        const dir = getPdfStorageDir(courseId);
-        await ensureDir(dir);
-        const pdfPath = getPdfFilePath(courseId);
+        const pdfDir = getWritableDir("pdfs", courseId);
+        const pdfPath = path.join(pdfDir, "source.pdf");
         const buf = Buffer.from(await res.arrayBuffer());
         await fs.writeFile(pdfPath, buf);
 
@@ -247,12 +240,11 @@ export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ a
       textContent = cleanExtractedContent(textContent);
 
       // Now, save the textContent to a .txt file.
-      const txtDir = getTxtStorageDir(courseId);
-      await ensureDir(txtDir);
-      const txtAbsPath = getTxtFilePath(courseId);
+      const txtAbsPath = getWritableFilePath(courseId, "texts", "txt");
       console.log(`[saveTxtFromUrl] Saving extracted text (length: ${textContent.length}) to ${txtAbsPath}`);
       await fs.writeFile(txtAbsPath, textContent);
-      const txtRelPath = path.posix.join("/downloads", "texts", courseId, "source.txt");
+      // This path is not directly web-accessible by default
+      const txtRelPath = path.posix.join("/.tmp", "texts", courseId, "source.txt");
       console.log(`[saveTxtFromUrl] Saved text file to ${txtAbsPath}`);
 
       return { absPath: txtAbsPath, relPath: txtRelPath, content: textContent, article };
@@ -363,11 +355,10 @@ function cleanExtractedContent(content: string): string {
 export async function saveUploadedPdf(file: File, courseId:string) {
   const arrayBuf = await file.arrayBuffer();
   const buf = Buffer.from(arrayBuf);
-  const dir = getPdfStorageDir(courseId);
-  await ensureDir(dir);
-  const absPath = getPdfFilePath(courseId);
+  const absPath = getWritableFilePath(courseId, "pdfs", "pdf");
   await fs.writeFile(absPath, buf);
-  const relPath = path.posix.join("/downloads", "pdfs", courseId, "source.pdf");
+  // This path is not directly web-accessible by default
+  const relPath = path.posix.join("/.tmp", "pdfs", courseId, "source.pdf");
   return { absPath, relPath };
 }
 

@@ -19,3 +19,6 @@ Thumbs.db
 
 youtubera_w
 *.pdf
+
+# Writable directory for runtime files
+/.tmp/

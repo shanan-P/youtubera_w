@@ -17,6 +17,12 @@ function ensureDir(dir: string) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
+function getWritableDir(...paths: string[]) {
+  const dir = resolvePath(process.cwd(), ".tmp", ...paths);
+  ensureDir(dir);
+  return dir;
+}
+
 // Export types and interfaces
 
 export function vttToPlainTextWithTimestamps(vtt: string): string {
@@ -102,14 +108,13 @@ export async function downloadYouTubeVideo(url: string): Promise<{
     } catch {}
   }
 
-  const id = info?.id || `yt_${Date.now()}`;
-  const outDir = resolvePath("public", "downloads", "videos", id);
-  ensureDir(outDir);
+  const id = info?.id || randomUUID();
+  const outDir = getWritableDir("videos", id);
   const outFile = join(outDir, `${id}.mp4`);
 
   // If already downloaded, return immediately
   if (existsSync(outFile)) {
-    const publicUrl = `/downloads/videos/${id}/${id}.mp4`;
+    const publicUrl = `/.tmp/videos/${id}/${id}.mp4`; // Not web-accessible by default
     const metadata = {
       title: info?.title ?? "Unknown",
       description: info?.description ?? "",
@@ -148,7 +153,8 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   }
   // If using cookies, provide a writable cookie jar for yt-dlp to update cookies.
   if (cookiesFile || cookiesFromBrowser) {
-    const cookieJarPath = join(process.cwd(), "public", "downloads", "temp", "cookies.txt");
+    const cookieDir = getWritableDir("cookies");
+    const cookieJarPath = join(cookieDir, "cookies.txt");
     common.push("--cookie-jar", cookieJarPath);
   }
   // Force a modern web client by default to avoid "not available on this app" issues
@@ -205,7 +211,7 @@ export async function downloadYouTubeVideo(url: string): Promise<{
     return { ok: false, error: err };
   }
 
-  const publicUrl = `/downloads/videos/${id}/${id}.mp4`;
+  const publicUrl = `/.tmp/videos/${id}/${id}.mp4`; // Not web-accessible by default
   const metadata = {
     title: info?.title ?? "Unknown",
     description: info?.description ?? "",
@@ -231,7 +237,7 @@ export interface SaveUploadedVideoResult {
 }
 
 export async function saveUploadedVideo(file: File, courseId: string): Promise<SaveUploadedVideoResult> {
-  const uploadsDir = resolvePath("public", "uploads", "videos", courseId);
+  const uploadsDir = getWritableDir("uploads", courseId);
   await mkdir(uploadsDir, { recursive: true });
   
   const fileExt = file.name.split('.').pop() || 'mp4';
@@ -243,7 +249,7 @@ export async function saveUploadedVideo(file: File, courseId: string): Promise<S
   
   return {
     absPath: filePath,
-    relPath: `/uploads/videos/${courseId}/${fileName}`,
+    relPath: `/.tmp/uploads/${courseId}/${fileName}`, // Not web-accessible by default
     fileName
   };
 }
@@ -283,9 +289,8 @@ export async function processVideo(
   } else {
     console.log("[processVideo] Handling videoSource as File (uploaded file).");
     // For File objects, we need to save them to a temporary path
-    const tempDir = resolvePath("public", "downloads", "temp");
-    ensureDir(tempDir);
-    videoPath = join(tempDir, videoSource.name);
+    const uploadDir = getWritableDir("uploads");
+    videoPath = join(uploadDir, videoSource.name);
     console.log("[processVideo] Attempting to save uploaded file to:", videoPath);
     try {
       const buffer = Buffer.from(await (videoSource as File).arrayBuffer());
