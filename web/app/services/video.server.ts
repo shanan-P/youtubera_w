@@ -133,6 +133,11 @@ export async function downloadYouTubeVideo(url: string): Promise<{
     "--add-header", "Referer: https://www.youtube.com/",
     "--add-header", "Accept-Language: en-US,en;q=0.9"
   ];
+
+  // Add ffmpeg location early to avoid parsing errors
+  if (FFMPEG_BIN) {
+    common.push("--ffmpeg-location", FFMPEG_BIN);
+  }
   const cookiesFile = process.env.YTDLP_COOKIES_FILE;
   if (cookiesFile && existsSync(cookiesFile)) {
     common.push("--cookies", cookiesFile);
@@ -140,6 +145,11 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   const cookiesFromBrowser = process.env.YTDLP_COOKIES_FROM_BROWSER;
   if (!cookiesFile && cookiesFromBrowser) {
     common.push("--cookies-from-browser", cookiesFromBrowser);
+  }
+  // If using cookies, provide a writable cookie jar for yt-dlp to update cookies.
+  if (cookiesFile || cookiesFromBrowser) {
+    const cookieJarPath = join(process.cwd(), "public", "downloads", "temp", "cookies.txt");
+    common.push("--cookie-jar", cookieJarPath);
   }
   // Force a modern web client by default to avoid "not available on this app" issues
   const ytClient = process.env.YTDLP_YOUTUBE_CLIENT || "web"; // e.g., web, android, tv
@@ -157,7 +167,6 @@ export async function downloadYouTubeVideo(url: string): Promise<{
     "-o", outFile,
     url
   ];
-  if (FFMPEG_BIN) args1.splice( args1.length - 2, 0, "--ffmpeg-location", FFMPEG_BIN );
   const dlTimeoutMs = Number(process.env.YTDLP_TIMEOUT_MS || 90000);
   let dlRes = await runYtDlp(args1, dlTimeoutMs);
 
@@ -172,7 +181,6 @@ export async function downloadYouTubeVideo(url: string): Promise<{
       "-o", outFile,
       url
     ];
-    if (FFMPEG_BIN) args2.splice( args2.length - 2, 0, "--ffmpeg-location", FFMPEG_BIN );
     dlRes = await runYtDlp(args2, dlTimeoutMs);
   }
 
@@ -188,7 +196,6 @@ export async function downloadYouTubeVideo(url: string): Promise<{
       "-o", outFile,
       url
     ];
-    if (FFMPEG_BIN) args3.splice( args3.length - 2, 0, "--ffmpeg-location", FFMPEG_BIN );
     dlRes = await runYtDlp(args3, dlTimeoutMs);
   }
 
