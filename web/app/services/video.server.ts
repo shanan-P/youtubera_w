@@ -33,6 +33,7 @@ function detectFfmpegPath(): string {
   const possiblePaths = [
     "/usr/bin/ffmpeg",
     "/usr/local/bin/ffmpeg",
+    "/opt/render/project/src/ffmpeg",
     "ffmpeg"
   ];
 
@@ -43,8 +44,29 @@ function detectFfmpegPath(): string {
     }
   }
 
+  // If file doesn't exist, try to use which command to find it
+  try {
+    const { execSync } = require('child_process');
+    const whichResult = execSync('which ffmpeg', { encoding: 'utf8' }).trim();
+    if (whichResult) {
+      console.log(`[auto-detect] Found ffmpeg via which: ${whichResult}`);
+      return whichResult;
+    }
+  } catch (error) {
+    console.log("[auto-detect] which ffmpeg failed:", error instanceof Error ? error.message : String(error));
+  }
+
   console.log("[auto-detect] Using ffmpeg from PATH");
   return "ffmpeg";
+}
+
+function getFfmpegLocationForYtDlp(ffmpegPath: string): string {
+  // yt-dlp expects --ffmpeg-location to be the directory containing ffmpeg
+  if (ffmpegPath.includes('/')) {
+    const lastSlashIndex = ffmpegPath.lastIndexOf('/');
+    return ffmpegPath.substring(0, lastSlashIndex);
+  }
+  return ffmpegPath; // fallback for PATH-based binaries
 }
 
 function detectCookiesFile(): string | null {
@@ -169,8 +191,10 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   ];
 
   // Add ffmpeg location early to avoid parsing errors
-  if (FFMPEG_BIN) {
-    common.push("--ffmpeg-location", FFMPEG_BIN);
+  if (FFMPEG_BIN && FFMPEG_BIN !== "ffmpeg") {
+    const ffmpegDir = getFfmpegLocationForYtDlp(FFMPEG_BIN);
+    console.log(`[yt-dlp] Setting ffmpeg location to: ${ffmpegDir}`);
+    common.push("--ffmpeg-location", ffmpegDir);
   }
   const cookiesFile = process.env.YTDLP_COOKIES_FILE || detectCookiesFile();
   if (cookiesFile && existsSync(cookiesFile)) {
@@ -684,7 +708,7 @@ if (!info) return null;
 
 export function runFfmpeg(argv: string[]) {
   const bin = FFMPEG_BIN || "ffmpeg";
-  console.log(`[ffmpeg] Using binary: ${bin}`);
+  console.log(`[ffmpeg] Using binary: ${bin} with args: [${argv.join(", ")}]`);
   return new Promise<{ ok: boolean; stdout: string; stderr: string; code: number }>((resolve) => {
     const proc = spawn(bin, argv, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
