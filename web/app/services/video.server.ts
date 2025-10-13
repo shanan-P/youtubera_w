@@ -8,13 +8,65 @@ import { pipeline } from 'node:stream/promises';
 import { getTopicsFromAudio } from "./gemini.server";
 // Google Cloud and Gemini imports will be dynamically imported when needed
 
-// Video processing service utils + minimal yt-dlp integration per `design.md`
+// Auto-detect binary and file paths
+function detectYtDlpPath(): string {
+  const possiblePaths = [
+    "/opt/render/project/src/web/.bin/yt-dlp",
+    "./.bin/yt-dlp",
+    "/usr/local/bin/yt-dlp",
+    "/usr/bin/yt-dlp",
+    "yt-dlp"
+  ];
 
-const YT_DLP_BIN = process.env.YTDLP_PATH;
-if (!YT_DLP_BIN) {
-  throw new Error("YTDLP_PATH environment variable is not set. Please configure the path to the yt-dlp binary.");
+  for (const path of possiblePaths) {
+    if (existsSync(path)) {
+      console.log(`[auto-detect] Found yt-dlp at: ${path}`);
+      return path;
+    }
+  }
+
+  console.warn("[auto-detect] yt-dlp not found in common locations, using 'yt-dlp' from PATH");
+  return "yt-dlp";
 }
-const FFMPEG_BIN = process.env.FFMPEG_PATH || "";
+
+function detectFfmpegPath(): string {
+  const possiblePaths = [
+    "/usr/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    "ffmpeg"
+  ];
+
+  for (const path of possiblePaths) {
+    if (existsSync(path)) {
+      console.log(`[auto-detect] Found ffmpeg at: ${path}`);
+      return path;
+    }
+  }
+
+  console.log("[auto-detect] Using ffmpeg from PATH");
+  return "ffmpeg";
+}
+
+function detectCookiesFile(): string | null {
+  const possiblePaths = [
+    "/opt/render/project/src/web/.cookies/cookies.txt",
+    "./.cookies/cookies.txt"
+  ];
+
+  for (const path of possiblePaths) {
+    if (existsSync(path)) {
+      console.log(`[auto-detect] Found cookies file at: ${path}`);
+      return path;
+    }
+  }
+
+  console.log("[auto-detect] No cookies file found");
+  return null;
+}
+
+// Initialize paths
+const YT_DLP_BIN = process.env.YTDLP_PATH || detectYtDlpPath();
+const FFMPEG_BIN = process.env.FFMPEG_PATH || detectFfmpegPath();
 
 function ensureDir(dir: string) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -60,6 +112,7 @@ export function vttToPlainTextWithTimestamps(vtt: string): string {
 
 async function runYtDlp(args: string[] | string, timeoutMs?: number) {
   const argv = Array.isArray(args) ? args : args.split(" ");
+  console.log(`[yt-dlp] Using binary: ${YT_DLP_BIN}`);
   return new Promise<{ ok: boolean; stdout: string; stderr: string; code: number }>((resolve) => {
     const proc = spawn(YT_DLP_BIN, argv, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -119,9 +172,12 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   if (FFMPEG_BIN) {
     common.push("--ffmpeg-location", FFMPEG_BIN);
   }
-  const cookiesFile = process.env.YTDLP_COOKIES_FILE;
+  const cookiesFile = process.env.YTDLP_COOKIES_FILE || detectCookiesFile();
   if (cookiesFile && existsSync(cookiesFile)) {
+    console.log(`[yt-dlp] Using cookies file: ${cookiesFile}`);
     common.push("--cookies", cookiesFile);
+  } else {
+    console.log("[yt-dlp] No cookies file found - YouTube may require authentication");
   }
   const cookiesFromBrowser = process.env.YTDLP_COOKIES_FROM_BROWSER;
   if (!cookiesFile && cookiesFromBrowser) {
@@ -628,6 +684,7 @@ if (!info) return null;
 
 export function runFfmpeg(argv: string[]) {
   const bin = FFMPEG_BIN || "ffmpeg";
+  console.log(`[ffmpeg] Using binary: ${bin}`);
   return new Promise<{ ok: boolean; stdout: string; stderr: string; code: number }>((resolve) => {
     const proc = spawn(bin, argv, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
