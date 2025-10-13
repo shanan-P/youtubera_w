@@ -10,7 +10,10 @@ import { getTopicsFromAudio } from "./gemini.server";
 
 // Video processing service utils + minimal yt-dlp integration per `design.md`
 
-const YT_DLP_BIN = process.env.YTDLP_PATH || "";
+const YT_DLP_BIN = process.env.YTDLP_PATH;
+if (!YT_DLP_BIN) {
+  throw new Error("YTDLP_PATH environment variable is not set. Please configure the path to the yt-dlp binary.");
+}
 const FFMPEG_BIN = process.env.FFMPEG_PATH || "";
 
 function ensureDir(dir: string) {
