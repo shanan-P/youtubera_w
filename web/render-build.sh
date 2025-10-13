@@ -25,18 +25,39 @@ else
   export FFMPEG_PATH="/usr/bin/ffmpeg"
 fi
 
-# 5. Set up cookies if they exist in secrets
-echo "Checking for cookies file in secrets..."
-if [ -f "/etc/secrets/youtube.txt" ]; then
-  echo "Found cookies file at /etc/secrets/youtube.txt"
-  echo "Setting up cookies file..."
-  mkdir -p .cookies
-  # Copy the read-only secret to a writable location
-  cp /etc/secrets/youtube.txt .cookies/cookies.txt
-  chmod 600 .cookies/cookies.txt
-  echo "Cookies file copied to .cookies/cookies.txt"
+# Debug: List contents of secrets directory if it exists
+echo "Checking secrets directory contents..."
+if [ -d "/etc/secrets" ]; then
+  echo "Contents of /etc/secrets:"
+  ls -la /etc/secrets/
 else
-  echo "No cookies file found at /etc/secrets/youtube.txt"
+  echo "/etc/secrets directory does not exist"
+fi
+
+echo "Checking for cookies file in secrets..."
+COOKIE_FOUND=false
+
+# Check multiple possible locations for the cookies file
+COOKIE_LOCATIONS=("/etc/secrets/youtube.txt" "/run/secrets/youtube.txt" "/secrets/youtube.txt")
+for location in "${COOKIE_LOCATIONS[@]}"; do
+  if [ -f "$location" ]; then
+    echo "Found cookies file at $location"
+    echo "Setting up cookies file..."
+    mkdir -p .cookies
+    # Copy the read-only secret to a writable location
+    cp "$location" .cookies/cookies.txt
+    chmod 600 .cookies/cookies.txt
+    echo "Cookies file copied to .cookies/cookies.txt"
+    COOKIE_FOUND=true
+    break
+  fi
+done
+
+if [ "$COOKIE_FOUND" = false ]; then
+  echo "No cookies file found in any of the expected locations:"
+  for location in "${COOKIE_LOCATIONS[@]}"; do
+    echo "  - $location"
+  done
 fi
 
 # 6. Set environment variables for yt-dlp and ffmpeg paths
