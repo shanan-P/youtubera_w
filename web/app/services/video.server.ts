@@ -181,13 +181,15 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   const common: string[] = [
     "--ignore-config",
     "--no-playlist",
-    "-R", "3",
-    "--fragment-retries", "10",
+    "-R", "5", // Increased retries from 3 to 5
+    "--fragment-retries", "20", // Increased from 10 to 20
     "--force-ipv4",
     "--geo-bypass",
     "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "--add-header", "Referer: https://www.youtube.com/",
-    "--add-header", "Accept-Language: en-US,en;q=0.9"
+    "--add-header", "Accept-Language: en-US,en;q=0.9",
+    "--socket-timeout", "30", // Add socket timeout
+    "--retries", "10" // Add general retries
   ];
 
   // Add ffmpeg location early to avoid parsing errors
@@ -224,7 +226,7 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   }
 
   // Try to get metadata first, now with cookie support
-  const metaRes = await runYtDlp([...common, "-J", url], 15000);
+  const metaRes = await runYtDlp([...common, "-J", url], 30000); // Increased from 15000 to 30000ms
   let info: any | null = null;
   if (metaRes.ok) {
     try {
@@ -265,7 +267,7 @@ export async function downloadYouTubeVideo(url: string): Promise<{
     "-o", outFile,
     url
   ];
-  const dlTimeoutMs = Number(process.env.YTDLP_TIMEOUT_MS || 90000);
+  const dlTimeoutMs = Number(process.env.YTDLP_TIMEOUT_MS || 180000); // Increased from 90000 to 180000ms (3 minutes)
   let dlRes = await runYtDlp(args1, dlTimeoutMs);
 
   // Attempt 2: fall back to bestvideo+bestaudio merge
