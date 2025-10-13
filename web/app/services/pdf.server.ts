@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { JSDOM } from "jsdom";
-import { Readability } from "@mozilla/readability";
+import { Readability, isProbablyReaderable } from "@mozilla/readability";
 import { Readable } from "stream";
 import {
   ServicePrincipalCredentials,
@@ -17,15 +17,22 @@ import {
   ServiceUsageError,
   ServiceApiError,
 } from "@adobe/pdfservices-node-sdk";
+import { extractTextFromPdfWithAdobe } from "./adobe-extract.server";
+
+interface ReadabilityArticle {
+  title: string;
+  content: string;
+  textContent: string;
+  length: number;
+  excerpt: string;
+  byline: string;
+  dir: string;
+  siteName: string;
+}
 
 async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
-
-// Use CommonJS require to load pdf-parse so that module.parent is defined
-// inside the library, preventing its debug path from reading a test PDF file.
-const require = createRequire(path.join(process.cwd(), "package.json"));
-const pdfParse: any = require("pdf-parse");
 
 export function getPdfStorageDir(courseId: string) {
   return path.join(process.cwd(), "public", "downloads", "pdfs", courseId);
@@ -112,7 +119,7 @@ export async function createPdfFromHtml(htmlContent: string, outputPath: string,
   }
 }
 
-export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ absPath: string; relPath: string, content: string }> {
+export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ absPath: string; relPath: string, content: string, article: ReadabilityArticle | null }> {
   console.log(`[saveTxtFromUrl] Starting to process URL: ${url}`);
   const res = await fetch(url, {
     headers: {
@@ -130,6 +137,7 @@ export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ a
   console.log(`[saveTxtFromUrl] Content-Type: ${contentType}`);
 
   let textContent = '';
+  let article: ReadabilityArticle | null = null;
 
   if (contentType.includes("application/pdf")) {
     console.log('[saveTxtFromUrl] Content is PDF, downloading and extracting text.');
@@ -139,10 +147,17 @@ export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ a
     const buf = Buffer.from(await res.arrayBuffer());
     await fs.writeFile(pdfPath, buf);
     
-    console.log(`[saveTxtFromUrl] Saved temporary PDF to ${pdfPath}, extracting text.`);
-    const { text } = await extractText(pdfPath);
-    textContent = text;
-    console.log(`[saveTxtFromUrl] Extracted ${textContent.length} characters from PDF.`);
+    console.log(`[saveTxtFromUrl] Saved temporary PDF to ${pdfPath}, extracting text with Adobe.`);
+    const adobeResult = await extractTextFromPdfWithAdobe(pdfPath);
+
+    if (adobeResult.error) {
+      console.error('[saveTxtFromUrl] Adobe extraction failed:', adobeResult.error);
+      textContent = "";
+    } else {
+      textContent = adobeResult.text || "";
+    }
+    
+    console.log(`[saveTxtFromUrl] Extracted ${textContent.length} characters from PDF using Adobe.`);
     // clean up the temp pdf
     await fs.unlink(pdfPath);
 
@@ -150,15 +165,19 @@ export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ a
     console.log('[saveTxtFromUrl] Content is HTML, attempting to extract article.');
     const html = await res.text();
     const doc = new JSDOM(html, { url });
-    const reader = new Readability(doc.window.document);
-    const article = reader.parse();
-
-    if (article && article.textContent) {
-      textContent = article.textContent;
-      console.log(`[saveTxtFromUrl] Readability extracted article successfully. Length: ${textContent.length}`);
+    if (isProbablyReaderable(doc.window.document)) {
+        const reader = new Readability(doc.window.document);
+        article = reader.parse() as ReadabilityArticle;
+        if (article) {
+            textContent = article.content; // Keep HTML content
+            console.log(`[saveTxtFromUrl] Readability extracted article successfully. Length: ${textContent.length}`);
+        } else {
+            console.warn('[saveTxtFromUrl] Readability failed to parse the article. Using empty content.');
+            textContent = '';
+        }
     } else {
-      console.warn('[saveTxtFromUrl] Readability failed to extract article or article is empty. Using empty content.');
-      textContent = '';
+        console.warn('[saveTxtFromUrl] Page is not considered readerable. Falling back to body content.');
+        textContent = doc.window.document.body.innerHTML;
     }
   } else {
     console.warn(`[saveTxtFromUrl] Unsupported content type: ${contentType}. Trying to read as text.`);
@@ -179,7 +198,7 @@ export async function saveTxtFromUrl(url: string, courseId: string): Promise<{ a
   const txtRelPath = path.posix.join("/downloads", "texts", courseId, "source.txt");
   console.log(`[saveTxtFromUrl] Saved text file to ${txtAbsPath}`);
 
-  return { absPath: txtAbsPath, relPath: txtRelPath, content: textContent };
+  return { absPath: txtAbsPath, relPath: txtRelPath, content: textContent, article };
 }
 
 export async function saveUploadedPdf(file: File, courseId:string) {
@@ -191,15 +210,6 @@ export async function saveUploadedPdf(file: File, courseId:string) {
   await fs.writeFile(absPath, buf);
   const relPath = path.posix.join("/downloads", "pdfs", courseId, "source.pdf");
   return { absPath, relPath };
-}
-
-export async function extractText(pdfPath: string) {
-  const data = await fs.readFile(pdfPath);
-  const parsed = await pdfParse(data);
-  const text = parsed.text || "";
-  const numpages = (parsed.numpages as number | undefined) ?? undefined;
-  const title = (parsed.info as any)?.Title as string | undefined;
-  return { text, numpages, title };
 }
 
 export async function processPDF(pdfSource: File | string) {

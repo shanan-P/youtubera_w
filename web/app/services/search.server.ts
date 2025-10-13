@@ -5,6 +5,7 @@ export async function searchCourses(query: string) {
     return [];
   }
 
+  const processedQuery = query.split(' ').filter(Boolean).map(word => word + ':*').join(' | ');
   const courses = await prisma.$queryRaw`
     SELECT
       id,
@@ -12,10 +13,10 @@ export async function searchCourses(query: string) {
       description,
       "thumbnailUrl",
       "sourceUrl",
-      ts_headline('english', "textContent", to_tsquery('english', ${query.split(' ').join(' & ')}), 'StartSel=<b>, StopSel=</b>, MaxFragments=1, FragmentDelimiter=..., MaxWords=15, MinWords=5') AS "highlight"
+      ts_headline('english', "textContent", to_tsquery('english', ${processedQuery}), 'StartSel=<b>, StopSel=</b>, MaxFragments=1, FragmentDelimiter=..., MaxWords=15, MinWords=5') AS "highlight"
     FROM "Course"
-    WHERE "search_vector" @@ to_tsquery('english', ${query.split(' ').join(' & ')})
-    ORDER BY ts_rank("search_vector", to_tsquery('english', ${query.split(' ').join(' & ')})) DESC;
+    WHERE "search_vector" @@ to_tsquery('english', ${processedQuery})
+    ORDER BY ts_rank("search_vector", to_tsquery('english', ${processedQuery})) DESC;
   `;
 
   return courses;

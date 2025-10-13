@@ -10,3 +10,5 @@ build
 .env.*
 !.env.example
 .DS_Store
+public/downloads/*
+public/uploads/*

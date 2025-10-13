@@ -9,6 +9,7 @@ import {
   ScrollRestoration,
 } from "@remix-run/react";
 import stylesheet from "./tailwind.css?url";
+import customStylesheet from "./styles/custom-highlight.css?url";
 import { getUser } from "~/utils/auth.server";
 import { ThemeProvider } from "./components/ThemeContext";
 import { Layout } from "./components/Layout";
@@ -25,7 +26,8 @@ export const links: LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
   { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400..700;1,400..700&display=swap" },
-  { rel: "stylesheet", href: "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" },
+  { rel: "stylesheet", href: "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" },
+  { rel: "stylesheet", href: customStylesheet },
   { rel: "stylesheet", href: "https://cdn.jsdelivr.net/gh/repalash/gilroy-free-webfont@fonts/Gilroy-Light.css" },
   { rel: "stylesheet", href: "https://cdn.jsdelivr.net/gh/repalash/gilroy-free-webfont@fonts/Gilroy-ExtraBold.css" },
   {

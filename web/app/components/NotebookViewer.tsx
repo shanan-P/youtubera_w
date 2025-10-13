@@ -164,7 +164,7 @@ export function NotebookViewer({
               return code;
             }
           },
-          langPrefix: theme === 'dark' ? 'hljs language-atom-one-dark' : 'hljs language-'
+          langPrefix: 'language-'
         } as MarkedOptions; // Type assertion to handle custom highlight function
         
         // Parse markdown

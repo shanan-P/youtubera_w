@@ -207,84 +207,24 @@ export default function CoursesDashboard() {
   const errorTimeoutRef = useRef<number | null>(null);
   const lastDeleteHandledRef = useRef<string | null>(null);
   const [search, setSearch] = useState<string>("");
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [showVideoUpload, setShowVideoUpload] = useState(false);
-  const filteredCourses = useMemo(() => {
-    const normalize = (s: string) =>
-      (s || "")
-        .toLowerCase()
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "");
-
-    const subseq = (q: string, t: string) => {
-      // true if all chars in q appear in order in t
-      if (!q) return true;
-      let i = 0;
-      for (let j = 0; j < t.length && i < q.length; j++) {
-        if (t[j] === q[i]) i++;
-      }
-      return i === q.length;
-    };
-
-    const wordStart = (q: string, t: string) => {
-      if (!q) return true;
-      const words = t.split(/[^a-z0-9]+/g).filter(Boolean);
-      return words.some((w) => w.startsWith(q));
-    };
-
-    const qRaw = search.trim();
-    if (!qRaw) return courses;
-    const qNorm = normalize(qRaw);
-    const tokens = qNorm.split(/\s+/).filter(Boolean);
-
-    // If query looks like a phrase (multi-word or long), prefer strict phrase includes
-    const phraseEligible = qNorm.length >= 5 || qRaw.includes(" ");
-    if (phraseEligible) {
-      // First, restrict to TITLE-only phrase matches
-      const titlePhraseMatches = courses.filter((c: any) => normalize(c.title).includes(qNorm));
-      if (titlePhraseMatches.length > 0) return titlePhraseMatches;
-      // Fallback: allow phrase across broader fields
-      const phraseMatches = courses.filter((c: any) => {
-        const title = normalize(c.title);
-        const desc = normalize(c.description);
-        const typeLabel = normalize(
-          CONTENT_TYPES.find((ct) => ct.value === c.contentType)?.label || c.contentType
-        );
-        const youtuber = normalize((c as any).youtuberName);
-        const channel = normalize((c as any).channelName);
-        const author = normalize((c as any).authorName);
-        const src = normalize((c as any).sourceUrl);
-        const id = normalize((c as any).id);
-        const hay = [title, desc, typeLabel, youtuber, channel, author, src, id].filter(Boolean) as string[];
-        return hay.some((h) => h.includes(qNorm));
-      });
-      if (phraseMatches.length > 0) return phraseMatches;
+  const searchFetcher = useFetcher();
+  
+  useEffect(() => {
+    if (search.trim() === "") {
+      // If search is cleared, we don't need to fetch, we can just show all courses
+      return;
     }
+    const handler = setTimeout(() => {
+      searchFetcher.load(`/api/search?q=${encodeURIComponent(search)}`);
+    }, 500); // Debounce search input
 
-    return courses.filter((c: any) => {
-      const title = normalize(c.title);
-      const desc = normalize(c.description);
-      const typeLabel = normalize(
-        CONTENT_TYPES.find((ct) => ct.value === c.contentType)?.label || c.contentType
-      );
-      const youtuber = normalize((c as any).youtuberName);
-      const channel = normalize((c as any).channelName);
-      const author = normalize((c as any).authorName);
-      const src = normalize((c as any).sourceUrl);
-      const id = normalize((c as any).id);
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [search]);
 
-      const hayOther = [desc, typeLabel, youtuber, channel, author, src, id].filter(Boolean) as string[];
+  const filteredCourses = search.trim() ? searchFetcher.data?.courses || [] : courses;
 
-      // every token must match: prioritize TITLE (includes/wordStart/fuzzy>=4).
-      // Other fields are allowed by strict includes only (no fuzzy) to reduce noise.
-      return tokens.every((tok) =>
-        title.includes(tok) ||
-        wordStart(tok, title) ||
-        (tok.length >= 4 && subseq(tok, title)) ||
-        hayOther.some((h) => h.includes(tok))
-      );
-    });
-  }, [search, courses]);
 
   useEffect(() => {
     if (updated) {
@@ -357,8 +297,8 @@ export default function CoursesDashboard() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Manage Courses</h2>
-        <Button variant="primary" onClick={() => setShowCreateForm(!showCreateForm)}>
-          {showCreateForm ? 'Cancel' : 'Create a New Course'}
+        <Button asChild variant="primary">
+          <Link to="/">Create a New Course</Link>
         </Button>
       </div>
       
@@ -406,38 +346,6 @@ export default function CoursesDashboard() {
         <p className="rounded border border-warn-border bg-warn-bg p-3 text-sm text-warn-text">
           Chapter-based segmentation was selected, but no timestamps were found in the video description (or the API key is missing). No course was created. Try Manual (paste timestamps) or add timestamps to the description.
         </p>
-      )}
-
-      {showCreateForm && (
-        <div className="rounded border border-subtle-border p-6">
-          <h3 className="font-medium">Create a new course</h3>
-          <Form method="post" className="mt-4 space-y-4">
-            <input type="hidden" name="_intent" value="create" />
-            <div>
-              <label htmlFor="title" className="block text-sm font-medium text-main-text">Title</label>
-              <input type="text" name="title" id="title" className="mt-1 block w-full rounded-md border-main-border shadow-sm focus:border-main-accent focus:ring-main-accent sm:text-sm" />
-            </div>
-            <div>
-              <label htmlFor="contentType" className="block text-sm font-medium text-main-text">Content Type</label>
-              <select name="contentType" id="contentType" className="mt-1 block w-full rounded-md border-main-border shadow-sm focus:border-main-accent focus:ring-main-accent sm:text-sm" onChange={(e) => setShowVideoUpload(e.target.value === 'uploaded_video')}>
-                {CONTENT_TYPES.map(ct => <option key={ct.value} value={ct.value}>{ct.label}</option>)}              </select>
-            </div>
-            {showVideoUpload && (
-              <div>
-                <label htmlFor="videoFile" className="block text-sm font-medium text-main-text">Video File</label>
-                <input type="file" name="videoFile" id="videoFile" className="mt-1 block w-full text-sm text-main-text file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-main-accent file:text-button-text hover:file:bg-main-accent/90" />
-              </div>
-            )}
-            <div>
-              <label htmlFor="description" className="block text-sm font-medium text-main-text">Description</label>
-              <textarea name="description" id="description" rows={3} className="mt-1 block w-full rounded-md border-main-border shadow-sm focus:border-main-accent focus:ring-main-accent sm:text-sm"></textarea>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={() => setShowCreateForm(false)}>Cancel</Button>
-              <Button type="submit" variant="primary">Create Course</Button>
-            </div>
-          </Form>
-        </div>
       )}
 
       <div className="rounded border border-subtle-border p-6">

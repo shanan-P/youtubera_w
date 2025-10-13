@@ -13,7 +13,7 @@ function customLog(...args: any[]) {
 
 // Configuration
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = "gemini-1.5-flash-latest";
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
 
 if (!GEMINI_API_KEY) {
   customLog("GEMINI_API_KEY is not set. Add it to .env to use Gemini features.");

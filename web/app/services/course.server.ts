@@ -55,12 +55,13 @@ export interface CreateCourseInput {
   [key: string]: any; // Allow additional fields
 };
 
-export type UpdateCourseInput = Partial<Omit<CreateCourseInput, "contentType" | "title">> & {
-  title?: string;
-  contentType?: ContentType;
-  textContent?: string | null;
-  processingType?: ProcessingType | null;
-};
+export type UpdateCourseInput = Partial<Omit<CreateCourseInput, "contentType" | "title">> &
+  {
+    title?: string;
+    contentType?: ContentType;
+    textContent?: string | null;
+    processingType?: ProcessingType | null;
+  };
 
 // --- Helper functions ---
 
@@ -84,21 +85,20 @@ export function parseTimestampSummary(text: string): TimestampParseResult {
   const groups: ParsedGroup[] = [];
   const lines = text.split('\n').filter(line => line.trim().length > 0);
 
-  const lineRegex = /^\* \*\*(.*?)\s(\d{2}:\d{2}:\d{2})\s*-\s*(\d{2}:\d{2}:\d{2}):\*\*\s*(.*)$/;
+  const lineRegex = /^\*\s+\*\*(\d{2}:\d{2}(?:\:\d{2})?)\s+-\s+(\d{2}:\d{2}(?:\:\d{2})?):\*\*\s+(.*)$/;
 
   for (const line of lines) {
     const match = line.match(lineRegex);
     if (match) {
-      const title = match[1].trim();
-      const start = parseTimestampToSeconds(match[2]);
-      const end = parseTimestampToSeconds(match[3]);
-      const desc = match[4].trim();
+      const start = parseTimestampToSeconds(match[1]);
+      const end = parseTimestampToSeconds(match[2]);
+      const desc = match[3].trim();
 
-      if (title && start !== null && end !== null) {
+      if (start !== null && end !== null) {
         const group: ParsedGroup = {
-          title: title,
+          title: desc,
           firstStart: start,
-          items: [{ title: title, start: start, end: end, desc: desc }]
+          items: [{ title: desc, start: start, end: end, desc: desc }]
         };
         groups.push(group);
       }
@@ -163,6 +163,42 @@ export async function updateCourse(id: string, data: UpdateCourseInput) {
 
 export async function deleteCourse(id: string) {
   return prisma.course.delete({ where: { id } });
+}
+
+export async function createCourseFromUrl(
+  url: string,
+  userId?: string,
+  sourceType: "youtube" | "youtube_text" = "youtube",
+  timestampsText?: string,
+  segmentation: "chapter" | "manual" | "audio" = "audio"
+) {
+  const isYoutube = isPlaylistUrl(url) || url.includes("youtube.com") || url.includes("youtu.be");
+  const isPdf = url.toLowerCase().endsWith(".pdf");
+
+  let source: CourseSource;
+
+  if (isYoutube) {
+    source = {
+      type: sourceType,
+      url,
+      segmentation,
+      timestampsText,
+    };
+  } else if (isPdf) {
+    source = {
+      type: "pdf_url",
+      url,
+    };
+  } else {
+    // For now, we'll just assume it's a generic web page and try to extract text.
+    // In the future, we could add more sophisticated content type detection.
+    source = {
+      type: "pdf_url", // Actually we are treating it as a generic url, which will be handled by saveTxtFromUrl
+      url,
+    };
+  }
+
+  return createCourseFromSource(source, userId);
 }
 
 // --- Main function ---
@@ -502,6 +538,7 @@ export async function createCourseFromSource(
       const fallbackTitle = decodeURIComponent(
         (url.split("/").pop() || "Article").replace(/\.[^/.]+$/, "")
       ) || "Article Course";
+      
       const created = await createCourse({
         title: fallbackTitle,
         contentType: "pdf_textbook" as ContentType,
@@ -514,9 +551,13 @@ export async function createCourseFromSource(
         
         const courseFilePath = saveResult.relPath;
         const courseTextContent = saveResult.content;
+        const article = saveResult.article;
 
         // Update course with extracted text and file path
         await updateCourse(created.id, { 
+          title: article?.title || fallbackTitle,
+          description: article?.excerpt,
+          authorName: article?.byline,
           filePath: courseFilePath,
           textContent: courseTextContent,
         });
@@ -770,7 +811,7 @@ contentType: ChapterContent.AUDIO,
       }
     }
     
-    default:
+default:
       return { jobId, error: `Unsupported source type: ${(source as any).type}` };
   }
 }

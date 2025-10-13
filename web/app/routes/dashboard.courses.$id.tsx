@@ -432,7 +432,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       try {
         const content = formData.get('content')?.toString();
         const mode = formData.get('mode')?.toString() as 'brief' | 'detail' | 'original' || 'original';
-        const theme = formData.get('theme')?.toString() || 'light';
         if (!content) {
           return json<ActionData>({ error: 'No content provided to format' }, { status: 400 });
         }
@@ -442,9 +441,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         if (result.error || !result.text) {
           return json<ActionData>({ error: result.error || 'Gemini returned empty response' }, { status: 500 });
         }
-
-        const outputPath = path.join(process.cwd(), "public", "downloads", "pdfs", id, `${safeFilename(course.title || 'document')}.pdf`);
-        await createPdfFromHtml(result.text, outputPath, theme);
 
         const latestVersion = await prisma.formattedVersion.findFirst({
           where: { courseId: id },
@@ -773,6 +769,7 @@ export default function CourseDetailRoute() {
                 </Form>
                 <Form method="post" className="flex items-center gap-2">
                   <input type="hidden" name="intent" value="formatWithGemini" />
+                  <input type="hidden" name="content" value={selectedContent} />
                   <input type="hidden" name="theme" value={theme} />
                   <Button
                     type="submit"
@@ -1036,7 +1033,7 @@ function slugify(text: string): string {
 
 function safeFilename(text: string): string {
   return text
-    .replace(/[\/:*?"<>|]/g, '') // Remove Windows forbidden characters
+    .replace(/[\\/:*?"<>|]/g, '') // Remove Windows forbidden characters
     .replace(/\s+/g, '_') // Replace spaces with underscores
     .replace(/_{2,}/g, '_') // Replace multiple underscores with single
     .trim()
