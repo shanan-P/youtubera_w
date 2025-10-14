@@ -430,7 +430,30 @@ async function updateCourse(id, data) {
     return db_server_1.prisma.course.update({ where: { id }, data });
 }
 async function deleteCourse(id) {
-    return db_server_1.prisma.course.delete({ where: { id } });
+    // First, find the course to get file paths
+    const course = await db_server_1.prisma.course.findUnique({
+        where: { id },
+        include: { chapters: { include: { shortVideos: true } } }
+    });
+    if (!course) {
+        // Course already deleted or never existed
+        return null;
+    }
+    // Now, delete the database record. This will cascade and delete chapters, shorts, etc.
+    const deletedCourse = await db_server_1.prisma.course.delete({ where: { id } });
+    // After successful DB deletion, clean up files from the filesystem.
+    try {
+        const { rm } = await Promise.resolve().then(() => __importStar(require("node:fs/promises")));
+        const path = await Promise.resolve().then(() => __importStar(require("node:path")));
+        // The course files are stored in a directory named after the course ID.
+        // e.g., .tmp/uploads/{courseId}, .tmp/pdfs/{courseId}, etc.
+        const courseDir = path.resolve(process.cwd(), ".tmp", "uploads", id);
+        await rm(courseDir, { recursive: true, force: true });
+    }
+    catch (e) {
+        console.warn(`[deleteCourse] Failed to delete files for course ${id}.`, e);
+    }
+    return deletedCourse;
 }
 function parseTimestampToSeconds(token) {
     // Accept formats like HH:MM:SS(.ms), H:MM:SS, MM:SS, M:SS
