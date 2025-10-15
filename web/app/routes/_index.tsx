@@ -1,26 +1,32 @@
 import { Form, Link, redirect, useNavigation } from "@remix-run/react";
 import { Button } from "~/components/Button";
-import type { ActionFunctionArgs } from "@remix-run/node";
-import { json, unstable_createFileUploadHandler, unstable_parseMultipartFormData } from "@remix-run/node";
+import type { ActionFunctionArgs, UploadHandler } from "@remix-run/node";
+import { json, unstable_composeUploadHandlers, unstable_createFileUploadHandler, unstable_createMemoryUploadHandler, unstable_parseMultipartFormData } from "@remix-run/node";
 import { createCourseFromUrl, createCourseFromSource } from "~/services/course.server";
 import { getUserId } from "~/utils/auth.server";
 import { useState, useMemo } from "react";
 
 export async function action({ request }: ActionFunctionArgs) {
+  console.log("--- ENTERING action function ---");
   const userId = await getUserId(request);
   const contentType = request.headers.get("Content-Type") || "";
 
   if (contentType.includes("multipart/form-data")) {
     // Handle file upload
-    const uploadHandler = unstable_createFileUploadHandler({
-      directory: "public/uploads",
-      maxPartSize: 500_000_000, // 500MB
-      file: ({ filename }) => filename,
-    });
-
+    const uploadHandler: UploadHandler = unstable_composeUploadHandlers(
+      unstable_createFileUploadHandler({
+        directory: "public/uploads",
+        maxPartSize: 500_000_000, // 500MB
+        file: ({ filename }) => filename,
+        filter: ({ name }) => name === "file",
+      }),
+      // parse everything else into memory
+      unstable_createMemoryUploadHandler()
+    );
     const formData = await unstable_parseMultipartFormData(request, uploadHandler);
     const file = formData.get("file");
     const fileType = formData.get("fileType");
+    console.log("--- formData fileType ---", fileType);
 
     if (!file || typeof file === "string") {
       return json({ error: "File not provided" }, { status: 400 });
@@ -34,7 +40,7 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     const result = await createCourseFromSource(
-      { type: "file", file, audioProcessing },
+      { type: "file", file, fileType: fileType as string, audioProcessing },
       userId ?? undefined
     );
 

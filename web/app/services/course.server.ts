@@ -27,7 +27,7 @@ export type YouTubeTextSource = { type: "youtube_text"; url: string };
 
 export type PdfUrlSource = { type: "pdf_url"; url: string };
 
-export type FileSource = { type: "file"; file: File; audioProcessing?: "segmentation" | "reading" };
+export type FileSource = { type: "file"; file: File; fileType: string; audioProcessing?: "segmentation" | "reading" };
 
 export type CourseSource = YouTubeSource | PdfUrlSource | FileSource | YouTubeTextSource;
 
@@ -575,9 +575,10 @@ export async function createCourseFromSource(
     }
     case "file": {
       const file = source.file;
-      const isPdf = file.type === 'application/pdf';
-      const isVideo = file.type.startsWith('video/');
-      const isAudio = file.type.startsWith('audio/');
+      const fileType = source.fileType;
+      const isPdf = fileType === 'pdf';
+      const isVideo = fileType === 'video';
+      const isAudio = fileType === 'audio-segmentation' || fileType === 'audio-transcript';
       const audioProcessing = source.audioProcessing;
 
       const created = await createCourse({

@@ -47,6 +47,7 @@ const adobe_extract_server_1 = require("../services/adobe-extract.server");
 async function createCourseFromSource(source, userId) {
     // NOTE: This is a stub that simulates job creation as per `design.md` and `tasks.md`.
     // Real implementation will enqueue a job (Bull) and call video/pdf services.
+    console.log("--- ENTERING createCourseFromSource ---");
     const jobId = `job_${Date.now()}`;
     switch (source.type) {
         case "youtube":
