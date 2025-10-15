@@ -104,6 +104,14 @@ echo "FFMPEG_PATH: $FFMPEG_PATH"
 echo "YTDLP_COOKIES_FILE: $YTDLP_COOKIES_FILE"
 echo "================================"
 
-# 7. Run Prisma migrations and build the application
+# 7. Generate Prisma Client
+echo "Generating Prisma Client..."
+npx prisma generate  #<-- This ensures the correct client is built in the correct environment
+
+# 8. Run Prisma migrations
+echo "Applying database migrations..."
 npx prisma migrate deploy
+
+# 9. Build the application
+echo "Building the application..."
 npm run build
