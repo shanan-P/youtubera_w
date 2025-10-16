@@ -14,6 +14,7 @@ import { formatWithGemini } from "./gemini.server";
 import { getCache, setCache } from "~/utils/redis.server";
 import { unstable_createFileUploadHandler, unstable_parseMultipartFormData } from "@remix-run/node";
 import { saveUploadedAudio, processAudio } from "./audio.server";
+import type { AiSegment } from "./ai.server";
 
 // --- Type definitions ---
 
@@ -419,9 +420,23 @@ export async function createCourseFromSource(
               throw new Error("Failed to process video content from audio");
             }
 
-            const parsed = parseTimestampSummary(result.results || "");
+            let segments: AiSegment[] = [];
+            try {
+              segments = JSON.parse(result.results);
+            } catch (e) {
+              // Fallback to old format
+              const parsed = parseTimestampSummary(result.results || "");
+              if (parsed && parsed.groups.length > 0) {
+                segments = parsed.groups.flatMap(g => g.items).map(item => ({
+                  title: item.title,
+                  startSeconds: item.start,
+                  endSeconds: item.end || item.start + 60,
+                  summary: item.desc || ''
+                }));
+              }
+            }
 
-            if (!parsed || parsed.groups.length === 0) {
+            if (segments.length === 0) {
               // Fallback: single full-video segment if nothing could be parsed
               const parent = await prisma.chapter.create({
                 data: {
@@ -446,43 +461,34 @@ export async function createCourseFromSource(
               });
             } else {
               // Create chapters for each top-level group
-              let chIdx = 0;
-              for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
-                const group = parsed.groups[gIdx];
-                const nextGroupStart = parsed.groups[gIdx + 1]?.firstStart ?? null;
-                const chapter = await prisma.chapter.create({
+              const chapter = await prisma.chapter.create({
+                data: {
+                  courseId: created.id,
+                  title: "AI Segments",
+                  contentType: ChapterContent.VIDEO,
+                  orderIndex: 0
+                }
+              });
+
+              for (let i = 0; i < segments.length; i++) {
+                const segment = segments[i];
+                const start = Math.max(0, Math.floor(segment.startSeconds));
+                const end = Math.max(start, Math.floor(segment.endSeconds));
+                const segDuration = end > start ? end - start : null;
+                await prisma.shortVideo.create({
                   data: {
-                    courseId: created.id,
-                    title: group.title || `Topic ${gIdx + 1}`,
-                    contentType: ChapterContent.VIDEO,
-                    orderIndex: chIdx++
+                    chapterId: chapter.id,
+                    title: segment.title || `Segment ${i + 1}`,
+                    duration: segDuration,
+                    videoUrl: created.sourceUrl || source.url,
+                    thumbnailUrl: thumb || undefined,
+                    startTime: start,
+                    endTime: end,
+                    processingType: "ai" as ProcessingType,
+                    customQuery: segment.summary ? String(segment.summary).trim() : null,
+                    orderIndex: i
                   }
                 });
-                const items = group.items.length > 0
-                  ? group.items
-                  : [{ title: group.title || `Topic ${gIdx + 1}`, start: group.firstStart ?? 0, end: null, desc: group.desc }];
-
-                for (let i = 0; i < items.length; i++) {
-                  const it = items[i];
-                  const nextStart = items[i + 1]?.start ?? nextGroupStart ?? (duration ? Math.round(duration) : null) ?? (it.start + 60);
-                  const start = Math.max(0, Math.floor(it.start));
-                  const end = it.end ? Math.max(start, Math.floor(it.end) + 2) : Math.max(start, Math.floor(nextStart));
-                  const segDuration = end > start ? end - start : null;
-                  await prisma.shortVideo.create({
-                    data: {
-                      chapterId: chapter.id,
-                      title: it.title || `Segment ${i + 1}`,
-                      duration: segDuration,
-                      videoUrl: created.sourceUrl || source.url,
-                      thumbnailUrl: thumb || undefined,
-                      startTime: start,
-                      endTime: end,
-                      processingType: "ai" as ProcessingType,
-                      customQuery: it.desc ? String(it.desc).trim() : null,
-                      orderIndex: i
-                    }
-                  });
-                }
               }
             }
             
@@ -725,15 +731,29 @@ export async function createCourseFromSource(
               throw new Error(result.error);
             }
 
-            const parsed = parseTimestampSummary(result.results || "");
+            let segments: AiSegment[] = [];
+            try {
+              segments = JSON.parse(result.results || "");
+            } catch (e) {
+              // Fallback to old format
+              const parsed = parseTimestampSummary(result.results || "");
+              if (parsed && parsed.groups.length > 0) {
+                segments = parsed.groups.flatMap(g => g.items).map(item => ({
+                  title: item.title,
+                  startSeconds: item.start,
+                  endSeconds: item.end || item.start + 60,
+                  summary: item.desc || ''
+                }));
+              }
+            }
 
-            if (!parsed || parsed.groups.length === 0) {
+            if (segments.length === 0) {
               // Fallback: single full-audio segment if nothing could be parsed
               const parent = await prisma.chapter.create({
                 data: {
                   courseId: created.id,
                   title: "Audio Segments",
-contentType: ChapterContent.AUDIO,
+                  contentType: ChapterContent.AUDIO,
                   orderIndex: 0
                 }
               });
@@ -752,45 +772,34 @@ contentType: ChapterContent.AUDIO,
               });
             } else {
               // Create chapters for each top-level group
-              let chIdx = 0;
-              for (let gIdx = 0; gIdx < parsed.groups.length; gIdx++) {
-                const group = parsed.groups[gIdx];
-                const nextGroupStart = parsed.groups[gIdx + 1]?.firstStart ?? null;
-                const chapter = await prisma.chapter.create({
+              const chapter = await prisma.chapter.create({
+                data: {
+                  courseId: created.id,
+                  title: "Audio Segments",
+                  contentType: ChapterContent.AUDIO,
+                  orderIndex: 0
+                }
+              });
+
+              for (let i = 0; i < segments.length; i++) {
+                const segment = segments[i];
+                const start = Math.max(0, Math.floor(segment.startSeconds));
+                const end = Math.max(start, Math.floor(segment.endSeconds));
+                const segDuration = end > start ? end - start : null;
+                await prisma.shortVideo.create({
                   data: {
-                    courseId: created.id,
-                    title: group.title || `Topic ${gIdx + 1}`,
-  contentType: ChapterContent.AUDIO,
-                    orderIndex: chIdx++
+                    chapterId: chapter.id,
+                    title: segment.title || `Segment ${i + 1}`,
+                    duration: segDuration,
+                    videoUrl: relPath, // Storing audio path in videoUrl
+                    thumbnailUrl: undefined,
+                    startTime: start,
+                    endTime: end,
+                    processingType: "custom" as ProcessingType, // mark as user-provided
+                    customQuery: segment.summary ? String(segment.summary).trim() : null,
+                    orderIndex: i
                   }
                 });
-                // If group has no items, treat group itself as a single segment (preserve any description)
-                const items = group.items.length > 0
-                  ? group.items
-                  : [{ title: group.title || `Topic ${gIdx + 1}`, start: group.firstStart ?? 0, end: null, desc: group.desc }];
-
-                // Compute end times for items within the group
-                for (let i = 0; i < items.length; i++) {
-                  const it = items[i];
-                  const nextStart = items[i + 1]?.start ?? nextGroupStart ?? (it.start + 60);
-                  const start = Math.max(0, Math.floor(it.start));
-                  const end = it.end ? Math.max(start, Math.floor(it.end) + 2) : Math.max(start, Math.floor(nextStart));
-                  const segDuration = end > start ? end - start : null;
-                  await prisma.shortVideo.create({
-                    data: {
-                      chapterId: chapter.id,
-                      title: it.title || `Segment ${i + 1}`,
-                      duration: segDuration,
-                      videoUrl: relPath, // Storing audio path in videoUrl
-                      thumbnailUrl: undefined,
-                      startTime: start,
-                      endTime: end,
-                      processingType: "custom" as ProcessingType, // mark as user-provided
-                      customQuery: it.desc ? String(it.desc).trim() : null,
-                      orderIndex: i
-                    }
-                  });
-                }
               }
             }
             

@@ -37,11 +37,21 @@ exports.formatWithGemini = formatWithGemini;
 exports.getTopicsFromAudio = getTopicsFromAudio;
 // Gemini PDF text extraction service
 const fs = __importStar(require("fs/promises"));
+const music_metadata_1 = require("music-metadata");
+const ai_server_1 = require("./ai.server");
+const video_server_1 = require("./video.server");
+// Custom logging array
+const logMessages = [];
+function customLog(...args) {
+    const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+    logMessages.push(message);
+    console.log(...args); // Still log to console for local debugging if visible
+}
 // Configuration
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = "gemini-1.5-flash-latest";
 if (!GEMINI_API_KEY) {
-    console.warn("GEMINI_API_KEY is not set. Add it to .env to use Gemini features.");
+    customLog("GEMINI_API_KEY is not set. Add it to .env to use Gemini features.");
 }
 /**
  * Paginates a markdown string by a given character size, inserting page break markers
@@ -77,10 +87,6 @@ function paginateMarkdown(text, size = 4000) {
     }
     return resultChunks.join('\n\n');
 }
-/**
- * Formats text using the Gemini API with retry logic and proper error handling.
- * This function now chunks the text by page breaks and sends each page to Gemini.
- */
 async function formatWithGemini(text, mode, options = {}) {
     if (!text) {
         return { error: "No text provided to format." };
@@ -218,52 +224,90 @@ async function formatWithGemini(text, mode, options = {}) {
     const paginatedContent = paginateMarkdown(fullMarkdown);
     return { text: paginatedContent };
 }
-async function getTopicsFromAudio(audioPath, customQuery) {
+async function getTopicsFromAudio(audioPath, mode, customQuery, url) {
+    console.log("Entering getTopicsFromAudio with audioPath:", audioPath, "and mode:", mode, "and customQuery:", customQuery, "and url:", url);
     if (!GEMINI_API_KEY) {
         console.error("GEMINI_API_KEY is not configured");
         return { error: "GEMINI_API_KEY is not configured" };
     }
+    if (mode === 'segmentation') {
+        let transcript = null;
+        if (url) {
+            console.log("Segmentation mode with URL, attempting transcript-based segmentation.");
+            const vtt = await (0, video_server_1.getYouTubeTranscriptVtt)(url);
+            if (vtt) {
+                console.log("Successfully fetched VTT transcript.");
+                transcript = (0, video_server_1.vttToPlainTextWithTimestamps)(vtt);
+            }
+        }
+        else {
+            console.log("Segmentation mode without URL, attempting to generate transcript from audio.");
+            const transcriptResult = await getTopicsFromAudio(audioPath, 'transcription', customQuery);
+            if (transcriptResult.text) {
+                transcript = transcriptResult.text;
+            }
+        }
+        if (transcript) {
+            const segments = await (0, ai_server_1.suggestSegmentsFromTranscript)(url || '', transcript, customQuery);
+            return { text: JSON.stringify(segments) };
+        }
+        else {
+            console.log("No transcript found, falling back to audio-based segmentation.");
+        }
+    }
     try {
+        const { format } = await (0, music_metadata_1.parseFile)(audioPath);
+        const duration = format.duration ? Math.round(format.duration) : 0;
+        const fileExt = audioPath.split('.').pop()?.toLowerCase() || 'flac';
+        const mimeType = `audio/${fileExt}`;
         const audioBuffer = await fs.readFile(audioPath);
-        // 1. Upload the file to the Gemini API
-        const uploadUrl = `https://generativelanguage.googleapis.com/v1beta/files?key=${GEMINI_API_KEY}`;
+        const fileName = audioPath.split(/[\\/]/).pop() || `audio.${fileExt}`;
+        const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${GEMINI_API_KEY}&uploadType=media`;
+        console.log("Initiating Gemini file upload to:", uploadUrl);
+        const audioBlob = new Blob([Uint8Array.from(audioBuffer).buffer], { type: mimeType });
         const uploadResponse = await fetch(uploadUrl, {
-            method: "POST",
+            method: 'POST',
             headers: {
-                "Content-Type": "application/json",
-                "X-Goog-Upload-Protocol": "resumable",
+                'Content-Type': mimeType, // Set the correct MIME type
+                'X-Goog-Upload-Protocol': 'raw', // Indicate raw upload
+                'X-Goog-Upload-File-Name': fileName, // Provide file name
             },
-            body: JSON.stringify({ file: { displayName: audioPath } }),
+            body: audioBlob, // Directly send the blob
         });
+        console.log("Gemini file upload response status:", uploadResponse.status, uploadResponse.statusText);
         if (!uploadResponse.ok) {
             const errorText = await uploadResponse.text();
             console.error("Gemini file upload failed:", uploadResponse.status, errorText);
-            return { error: "Gemini file upload failed" };
+            return { error: `Gemini file upload failed: ${uploadResponse.status} - ${errorText}` };
         }
         const uploadResult = await uploadResponse.json();
-        const fileUri = uploadResult.file.uri;
-        const gcsUploadUrl = uploadResponse.headers.get("X-Goog-Upload-URL");
-        if (!gcsUploadUrl) {
-            return { error: "Could not get GCS upload URL" };
+        console.log("Gemini file upload result:", uploadResult);
+        if (!uploadResult?.file?.uri) {
+            console.error("Invalid Gemini file upload response or missing file URI:", uploadResult);
+            return { error: "Gemini file upload response missing file URI or invalid format." };
         }
-        await fetch(gcsUploadUrl, {
-            method: "PUT",
-            headers: { "Content-Type": "audio/flac" },
-            body: audioBuffer,
-        });
-        // 2. Generate content using the uploaded file
-        const prompt = customQuery
-            ? `Analyze the following audio and answer the question: ${customQuery}`
-            : "Analyze the following audio and provide a detailed list of subtopics with timestamps. Format the output as a markdown list.";
+        const fileUri = uploadResult.file.uri;
+        const prompt = mode === 'transcription'
+            ? 'Transcribe the following audio. If the audio is not in English, please transcribe it and then translate the transcription to English.'
+            : customQuery
+                ? `Transcribe the following audio and answer the question: ${customQuery}`
+                : `You are an expert in analyzing audio content. Your task is to process the given audio file and generate a structured summary of its key topics. The total duration of the audio file is ${duration} seconds. Please ensure that all timestamps in your response are within this duration.`;
+        console.log("Using prompt for Gemini:", prompt);
         const generateUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
         const generateRequest = {
             contents: [
                 {
+                    role: "user",
                     parts: [
                         { text: prompt },
-                        { fileData: { mimeType: "audio/flac", fileUri } },
+                        {
+                            fileData: {
+                                mimeType: mimeType,
+                                fileUri: fileUri
+                            }
+                        },
                     ],
-                },
+                }
             ],
             generationConfig: {
                 temperature: 0.2,
@@ -272,9 +316,12 @@ async function getTopicsFromAudio(audioPath, customQuery) {
                 maxOutputTokens: 8192,
             },
         };
+        console.log("Sending generation request to Gemini...");
         const generateResponse = await fetch(generateUrl, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+                "Content-Type": "application/json"
+            },
             body: JSON.stringify(generateRequest),
         });
         if (!generateResponse.ok) {
@@ -287,7 +334,7 @@ async function getTopicsFromAudio(audioPath, customQuery) {
         return { text };
     }
     catch (error) {
-        console.error("Error processing audio with Gemini:", error);
-        return { error: "An unexpected error occurred during Gemini audio processing." };
+        console.error("Error processing audio with Gemini:", String(error));
+        return { error: `An unexpected error occurred during Gemini audio processing: ${String(error)}` };
     }
 }

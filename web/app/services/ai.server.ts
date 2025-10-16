@@ -7,7 +7,7 @@ export type AiSegment = {
   summary?: string;
 };
 
-const GEMINI_MODEL = env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+const GEMINI_MODEL = env.GEMINI_MODEL || "gemini-1.5-flash-latest";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 function buildPrompt(url: string, customPrompt?: string) {

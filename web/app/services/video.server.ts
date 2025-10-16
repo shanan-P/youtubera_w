@@ -108,7 +108,7 @@ export function vttToPlainTextWithTimestamps(vtt: string): string {
   const lines = vtt.split(/\r?\n/);
   const out: string[] = [];
   let i = 0;
-  const timeRe = /^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/;
+  const timeRe = /^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/; // Corrected regex for newlines
   while (i < lines.length) {
     const line = lines[i++].trim();
     if (!line) continue;
@@ -369,10 +369,12 @@ export async function processVideo(
   console.log("[processVideo] processingType:", processingType, "customQuery:", customQuery);
 
   let videoPath: string;
+  let sourceUrl: string | undefined;
 
   if (typeof videoSource === "string") {
     // Check if it's a local file path or a URL
     if (videoSource.startsWith('http') || videoSource.startsWith('www.')) {
+      sourceUrl = videoSource;
       console.log("[processVideo] Handling videoSource as URL.");
       const downloadResult = await downloadYouTubeVideo(videoSource);
       if (!downloadResult.ok || !downloadResult.videoPath) {
@@ -433,7 +435,7 @@ export async function processVideo(
 
   if (processingType === "ai" || processingType === "custom") {
     console.log("[processVideo] Calling getTopicsFromAudio with audioPath:", audioPath);
-    const topicsResult = await getTopicsFromAudio(audioPath, "segmentation", customQuery);
+    const topicsResult = await getTopicsFromAudio(audioPath, "segmentation", customQuery, sourceUrl);
     console.log("[processVideo] getTopicsFromAudio returned:", topicsResult);
     if (topicsResult.error) {
       console.error("[processVideo] Gemini processing failed:", topicsResult.error);

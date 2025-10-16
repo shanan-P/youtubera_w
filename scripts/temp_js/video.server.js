@@ -2,8 +2,11 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.vttToPlainTextWithTimestamps = vttToPlainTextWithTimestamps;
 exports.downloadYouTubeVideo = downloadYouTubeVideo;
+exports.saveUploadedVideo = saveUploadedVideo;
 exports.processVideo = processVideo;
 exports.extractYouTubeMetadata = extractYouTubeMetadata;
+exports.parseFormattedChapters = parseFormattedChapters;
+exports.parseCustomFormattedChapter = parseCustomFormattedChapter;
 exports.getYouTubeChapters = getYouTubeChapters;
 exports.getYouTubeTranscriptVtt = getYouTubeTranscriptVtt;
 exports.runFfmpeg = runFfmpeg;
@@ -14,21 +17,98 @@ exports.downloadYouTubePlaylist = downloadYouTubePlaylist;
 const node_child_process_1 = require("node:child_process");
 const node_fs_1 = require("node:fs");
 const promises_1 = require("node:fs/promises");
+const crypto_1 = require("crypto");
 const node_path_1 = require("node:path");
-// Video processing service utils + minimal yt-dlp integration per `design.md`
-const YT_DLP_BIN = process.env.YTDLP_PATH || "yt-dlp";
-const FFMPEG_BIN = process.env.FFMPEG_PATH || "";
+const gemini_server_1 = require("./gemini.server");
+// Google Cloud and Gemini imports will be dynamically imported when needed
+// Auto-detect binary and file paths
+function detectYtDlpPath() {
+    const possiblePaths = [
+        "/opt/render/project/src/web/.bin/yt-dlp",
+        "./.bin/yt-dlp",
+        "/usr/local/bin/yt-dlp",
+        "/usr/bin/yt-dlp",
+        "yt-dlp"
+    ];
+    for (const path of possiblePaths) {
+        if ((0, node_fs_1.existsSync)(path)) {
+            console.log(`[auto-detect] Found yt-dlp at: ${path}`);
+            return path;
+        }
+    }
+    console.warn("[auto-detect] yt-dlp not found in common locations, using 'yt-dlp' from PATH");
+    return "yt-dlp";
+}
+function detectFfmpegPath() {
+    const possiblePaths = [
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/opt/render/project/src/ffmpeg",
+        "ffmpeg"
+    ];
+    for (const path of possiblePaths) {
+        if ((0, node_fs_1.existsSync)(path)) {
+            console.log(`[auto-detect] Found ffmpeg at: ${path}`);
+            return path;
+        }
+    }
+    // If file doesn't exist, try to use which command to find it
+    try {
+        const { execSync } = require('child_process');
+        const whichResult = execSync('which ffmpeg', { encoding: 'utf8' }).trim();
+        if (whichResult) {
+            console.log(`[auto-detect] Found ffmpeg via which: ${whichResult}`);
+            return whichResult;
+        }
+    }
+    catch (error) {
+        console.log("[auto-detect] which ffmpeg failed:", error instanceof Error ? error.message : String(error));
+    }
+    console.log("[auto-detect] Using ffmpeg from PATH");
+    return "ffmpeg";
+}
+function getFfmpegLocationForYtDlp(ffmpegPath) {
+    // yt-dlp expects --ffmpeg-location to be the directory containing ffmpeg
+    if (ffmpegPath.includes('/')) {
+        const lastSlashIndex = ffmpegPath.lastIndexOf('/');
+        return ffmpegPath.substring(0, lastSlashIndex);
+    }
+    return ffmpegPath; // fallback for PATH-based binaries
+}
+function detectCookiesFile() {
+    const possiblePaths = [
+        "/opt/render/project/src/web/.cookies/cookies.txt",
+        "./.cookies/cookies.txt"
+    ];
+    for (const path of possiblePaths) {
+        if ((0, node_fs_1.existsSync)(path)) {
+            console.log(`[auto-detect] Found cookies file at: ${path}`);
+            return path;
+        }
+    }
+    console.log("[auto-detect] No cookies file found");
+    return null;
+}
+// Initialize paths
+const YT_DLP_BIN = process.env.YTDLP_PATH || detectYtDlpPath();
+const FFMPEG_BIN = process.env.FFMPEG_PATH || detectFfmpegPath();
 function ensureDir(dir) {
     if (!(0, node_fs_1.existsSync)(dir))
         (0, node_fs_1.mkdirSync)(dir, { recursive: true });
 }
+function getWritableDir(...paths) {
+    const dir = (0, node_path_1.resolve)(process.cwd(), ".tmp", ...paths);
+    ensureDir(dir);
+    return dir;
+}
+// Export types and interfaces
 function vttToPlainTextWithTimestamps(vtt) {
     // Very lightweight WEBVTT parser to flatten into lines with [start-end] text
     // Example output: [00:00:01.000-00:00:04.000] Hello world
     const lines = vtt.split(/\r?\n/);
     const out = [];
     let i = 0;
-    const timeRe = /^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/;
+    const timeRe = /^(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/; // Corrected regex for newlines
     while (i < lines.length) {
         const line = lines[i++].trim();
         if (!line)
@@ -62,6 +142,7 @@ function vttToPlainTextWithTimestamps(vtt) {
 }
 async function runYtDlp(args, timeoutMs) {
     const argv = Array.isArray(args) ? args : args.split(" ");
+    console.log(`[yt-dlp] Using binary: ${YT_DLP_BIN}`);
     return new Promise((resolve) => {
         const proc = (0, node_child_process_1.spawn)(YT_DLP_BIN, argv, { stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "";
@@ -97,8 +178,67 @@ async function runYtDlp(args, timeoutMs) {
     });
 }
 async function downloadYouTubeVideo(url) {
-    // Try to get metadata first (ignore any local yt-dlp config)
-    const metaRes = await runYtDlp(["--ignore-config", "--no-playlist", "-J", url], 15000);
+    // Common hardening flags for YouTube to avoid 403s and improve stability
+    const common = [
+        "--ignore-config",
+        "--no-playlist",
+        "-R", "5", // Increased retries from 3 to 5
+        "--fragment-retries", "20", // Increased from 10 to 20
+        "--force-ipv4",
+        "--geo-bypass",
+        "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "--add-header", "Referer: https://www.youtube.com/",
+        "--add-header", "Accept-Language: en-US,en;q=0.9",
+        "--socket-timeout", "30", // Add socket timeout
+        "--retries", "10" // Add general retries
+    ];
+    // Add ffmpeg location early to avoid parsing errors
+    if (FFMPEG_BIN && FFMPEG_BIN !== "ffmpeg") {
+        const ffmpegDir = getFfmpegLocationForYtDlp(FFMPEG_BIN);
+        console.log(`[yt-dlp] Setting ffmpeg location to: ${ffmpegDir}`);
+        common.push("--ffmpeg-location", ffmpegDir);
+    }
+    const cookiesFile = process.env.YTDLP_COOKIES_FILE || detectCookiesFile();
+    if (cookiesFile && (0, node_fs_1.existsSync)(cookiesFile)) {
+        console.log(`[yt-dlp] Using cookies file: ${cookiesFile}`);
+        console.log(`[yt-dlp] Cookies file format check:`);
+        try {
+            const cookiesContent = (0, node_fs_1.readFileSync)(cookiesFile, 'utf8');
+            const lines = cookiesContent.split('\n');
+            console.log(`[yt-dlp] First line: ${lines[0] || 'empty'}`);
+            console.log(`[yt-dlp] YouTube cookies count: ${cookiesContent.split('youtube.com').length - 1}`);
+            console.log(`[yt-dlp] Total cookies: ${lines.filter((line) => line.trim() && !line.startsWith('#')).length}`);
+        }
+        catch (error) {
+            console.log(`[yt-dlp] Error reading cookies file: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        common.push("--cookies", cookiesFile);
+    }
+    else {
+        console.log("[yt-dlp] No cookies file found - YouTube may require authentication");
+        console.log(`[yt-dlp] Checked paths: ${process.env.YTDLP_COOKIES_FILE || 'env var not set'}`);
+    }
+    const cookiesFromBrowser = process.env.YTDLP_COOKIES_FROM_BROWSER;
+    if (!cookiesFile && cookiesFromBrowser) {
+        common.push("--cookies-from-browser", cookiesFromBrowser);
+    }
+    // If using cookies, provide a writable cookie jar for yt-dlp to update cookies.
+    if (cookiesFile || cookiesFromBrowser) {
+        const cookieDir = getWritableDir("cookies");
+        const cookieJarPath = (0, node_path_1.join)(cookieDir, "cookies.txt");
+        // Only add cookie-jar if cookiesFromBrowser is set (for updating cookies)
+        // Don't add cookie-jar when using a static cookies file as it may not be supported
+        if (cookiesFromBrowser && !cookiesFile) {
+            common.push("--cookie-jar", cookieJarPath);
+        }
+    }
+    // Force a modern web client by default to avoid "not available on this app" issues
+    const ytClient = process.env.YTDLP_YOUTUBE_CLIENT || "web"; // e.g., web, android, tv
+    if (ytClient) {
+        common.push("--extractor-args", `youtube:player_client=${ytClient}`);
+    }
+    // Try to get metadata first, now with cookie support
+    const metaRes = await runYtDlp([...common, "-J", url], 30000); // Increased from 15000 to 30000ms
     let info = null;
     if (metaRes.ok) {
         try {
@@ -106,13 +246,18 @@ async function downloadYouTubeVideo(url) {
         }
         catch { }
     }
-    const id = info?.id || `yt_${Date.now()}`;
-    const outDir = (0, node_path_1.resolve)("public", "downloads", "videos", id);
-    ensureDir(outDir);
+    else {
+        // If metadata fails, we cannot proceed.
+        const err = metaRes.stderr || metaRes.stdout || "yt-dlp metadata fetch failed";
+        console.warn("[yt-dlp] metadata fetch failed:", err);
+        return { ok: false, error: err };
+    }
+    const id = info?.id || (0, crypto_1.randomUUID)();
+    const outDir = getWritableDir("videos", id);
     const outFile = (0, node_path_1.join)(outDir, `${id}.mp4`);
     // If already downloaded, return immediately
     if ((0, node_fs_1.existsSync)(outFile)) {
-        const publicUrl = `/downloads/videos/${id}/${id}.mp4`;
+        const publicUrl = `/.tmp/videos/${id}/${id}.mp4`; // Not web-accessible by default
         const metadata = {
             title: info?.title ?? "Unknown",
             description: info?.description ?? "",
@@ -123,58 +268,29 @@ async function downloadYouTubeVideo(url) {
         };
         return { ok: true, videoPath: outFile, publicUrl, metadata };
     }
-    // Common hardening flags for YouTube to avoid 403s and improve stability
-    const common = [
-        "--ignore-config",
-        "--no-playlist",
-        "-R", "3",
-        "--fragment-retries", "10",
-        "--force-ipv4",
-        "--geo-bypass",
-        "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "--add-header", "Referer: https://www.youtube.com/",
-        "--add-header", "Accept-Language: en-US,en;q=0.9"
-    ];
-    const cookiesFile = process.env.YTDLP_COOKIES_FILE;
-    if (cookiesFile && (0, node_fs_1.existsSync)(cookiesFile)) {
-        common.push("--cookies", cookiesFile);
-    }
-    const cookiesFromBrowser = process.env.YTDLP_COOKIES_FROM_BROWSER;
-    if (!cookiesFile && cookiesFromBrowser) {
-        common.push("--cookies-from-browser", cookiesFromBrowser);
-    }
-    // Force a modern web client by default to avoid "not available on this app" issues
-    const ytClient = process.env.YTDLP_YOUTUBE_CLIENT || "web"; // e.g., web, android, tv
-    if (ytClient) {
-        common.push("--extractor-args", `youtube:player_client=${ytClient}`);
-    }
     // Attempt 1: prefer progressive MP4 to reduce fragmented stream issues
     const args1 = [
         ...common,
-        "-N", "8",
-        "-f", "best[ext=mp4]/best",
+        "-N", "4",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--force-overwrites",
         "-o", outFile,
         url
     ];
-    if (FFMPEG_BIN)
-        args1.splice(args1.length - 2, 0, "--ffmpeg-location", FFMPEG_BIN);
-    const dlTimeoutMs = Number(process.env.YTDLP_TIMEOUT_MS || 90000);
+    const dlTimeoutMs = Number(process.env.YTDLP_TIMEOUT_MS || 180000); // Increased from 90000 to 180000ms (3 minutes)
     let dlRes = await runYtDlp(args1, dlTimeoutMs);
     // Attempt 2: fall back to bestvideo+bestaudio merge
     if (!dlRes.ok) {
         const args2 = [
             ...common,
-            "-N", "8",
+            "-N", "4",
             "-f", "bv*+ba/best",
             "--merge-output-format", "mp4",
             "--force-overwrites",
             "-o", outFile,
             url
         ];
-        if (FFMPEG_BIN)
-            args2.splice(args2.length - 2, 0, "--ffmpeg-location", FFMPEG_BIN);
         dlRes = await runYtDlp(args2, dlTimeoutMs);
     }
     // Attempt 3: HLS-only fallback using ffmpeg for HLS, single-connection to avoid 403 on fragments
@@ -189,8 +305,6 @@ async function downloadYouTubeVideo(url) {
             "-o", outFile,
             url
         ];
-        if (FFMPEG_BIN)
-            args3.splice(args3.length - 2, 0, "--ffmpeg-location", FFMPEG_BIN);
         dlRes = await runYtDlp(args3, dlTimeoutMs);
     }
     if (!dlRes.ok) {
@@ -198,7 +312,7 @@ async function downloadYouTubeVideo(url) {
         console.warn("[yt-dlp] download failed:", err);
         return { ok: false, error: err };
     }
-    const publicUrl = `/downloads/videos/${id}/${id}.mp4`;
+    const publicUrl = `/.tmp/videos/${id}/${id}.mp4`; // Not web-accessible by default
     const metadata = {
         title: info?.title ?? "Unknown",
         description: info?.description ?? "",
@@ -209,32 +323,69 @@ async function downloadYouTubeVideo(url) {
     };
     return { ok: true, videoPath: outFile, publicUrl, metadata };
 }
-const gemini_server_1 = require("./gemini.server");
+async function saveUploadedVideo(file, courseId) {
+    const uploadsDir = getWritableDir("uploads", courseId);
+    await (0, promises_1.mkdir)(uploadsDir, { recursive: true });
+    const fileExt = file.name.split('.').pop() || 'mp4';
+    const fileName = `${(0, crypto_1.randomUUID)()}.${fileExt}`;
+    const filePath = (0, node_path_1.join)(uploadsDir, fileName);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await (0, promises_1.writeFile)(filePath, buffer);
+    return {
+        absPath: filePath,
+        relPath: `/.tmp/uploads/${courseId}/${fileName}`, // Not web-accessible by default
+        fileName
+    };
+}
 async function processVideo(videoSource, processingType, customQuery) {
-    console.log("[processVideo]", { videoSource, processingType, customQuery });
+    console.log("--- Entering processVideo function ---");
+    console.log("[processVideo] videoSource type:", typeof videoSource, "value:", videoSource);
+    console.log("[processVideo] processingType:", processingType, "customQuery:", customQuery);
     let videoPath;
+    let sourceUrl;
     if (typeof videoSource === "string") {
-        const downloadResult = await downloadYouTubeVideo(videoSource);
-        if (!downloadResult.ok || !downloadResult.videoPath) {
-            return { error: "Failed to download video" };
+        // Check if it's a local file path or a URL
+        if (videoSource.startsWith('http') || videoSource.startsWith('www.')) {
+            sourceUrl = videoSource;
+            console.log("[processVideo] Handling videoSource as URL.");
+            const downloadResult = await downloadYouTubeVideo(videoSource);
+            if (!downloadResult.ok || !downloadResult.videoPath) {
+                console.error("[processVideo] Failed to download video:", downloadResult.error);
+                return { error: downloadResult.error || 'Failed to download video' };
+            }
+            videoPath = downloadResult.videoPath;
+            console.log("[processVideo] Downloaded videoPath:", videoPath);
         }
-        videoPath = downloadResult.videoPath;
+        else {
+            // Handle local file path
+            console.log("[processVideo] Handling videoSource as local file path.");
+            if (!(0, node_fs_1.existsSync)(videoSource)) {
+                const errorMsg = `Video file not found at path: ${videoSource}`;
+                console.error("[processVideo]", errorMsg);
+                return { error: errorMsg };
+            }
+            videoPath = videoSource;
+        }
     }
     else {
+        console.log("[processVideo] Handling videoSource as File (uploaded file).");
         // For File objects, we need to save them to a temporary path
-        const tempDir = (0, node_path_1.resolve)("public", "downloads", "temp");
-        ensureDir(tempDir);
-        videoPath = (0, node_path_1.join)(tempDir, videoSource.name);
+        const uploadDir = getWritableDir("uploads");
+        videoPath = (0, node_path_1.join)(uploadDir, videoSource.name);
+        console.log("[processVideo] Attempting to save uploaded file to:", videoPath);
         try {
             const buffer = Buffer.from(await videoSource.arrayBuffer());
             await (0, promises_1.writeFile)(videoPath, buffer);
+            console.log("[processVideo] Successfully saved uploaded file.");
         }
         catch (error) {
-            console.error("Failed to write uploaded file:", error);
+            console.error("[processVideo] Failed to write uploaded file:", error);
             return { error: "Failed to save uploaded file" };
         }
     }
+    console.log("[processVideo] videoPath before audio extraction:", videoPath);
     const audioPath = videoPath.replace(/\.mp4$/, ".flac");
+    console.log("[processVideo] audioPath for FFmpeg:", audioPath);
     const ffmpegArgs = [
         "-i", videoPath,
         "-y",
@@ -243,22 +394,39 @@ async function processVideo(videoSource, processingType, customQuery) {
         "-ar", "16000",
         audioPath,
     ];
+    console.log("[processVideo] FFmpeg arguments:", ffmpegArgs.join(" "));
     const ffmpegResult = await runFfmpeg(ffmpegArgs);
+    console.log("[processVideo] FFmpeg result:", ffmpegResult);
     if (!ffmpegResult.ok) {
-        console.error("FFmpeg audio extraction failed:", ffmpegResult.stderr);
+        console.error("[processVideo] FFmpeg audio extraction failed:", ffmpegResult.stderr);
         return { error: "Failed to extract audio from video" };
     }
-    console.log(`Audio extracted to: ${audioPath}`);
+    console.log(`[processVideo] Audio extracted to: ${audioPath}`);
     if (processingType === "ai" || processingType === "custom") {
-        const topicsResult = await (0, gemini_server_1.getTopicsFromAudio)(audioPath, customQuery);
+        console.log("[processVideo] Calling getTopicsFromAudio with audioPath:", audioPath);
+        const topicsResult = await (0, gemini_server_1.getTopicsFromAudio)(audioPath, "segmentation", customQuery, sourceUrl);
+        console.log("[processVideo] getTopicsFromAudio returned:", topicsResult);
         if (topicsResult.error) {
+            console.error("[processVideo] Gemini processing failed:", topicsResult.error);
             return { error: `Gemini processing failed: ${topicsResult.error}` };
         }
         // Here you would typically save the results to your database
-        console.log("Gemini processing successful:", topicsResult.text);
-        return { id: `vp_${Date.now()}`, status: "completed", results: topicsResult.text };
+        console.log("[processVideo] Gemini processing successful:", topicsResult.text);
+        return { results: topicsResult.text, audioPath };
     }
-    return { id: `vp_${Date.now()}`, status: "completed" };
+    else if (processingType === "transcript") {
+        console.log("[processVideo] Calling getTranscriptFromAudio with audioPath:", audioPath);
+        const transcriptResult = await (0, gemini_server_1.getTopicsFromAudio)(audioPath, "transcription");
+        console.log("[processVideo] getTranscriptFromAudio returned:", transcriptResult);
+        if (transcriptResult.error) {
+            console.error("[processVideo] Transcription failed:", transcriptResult.error);
+            return { error: `Transcription failed: ${transcriptResult.error}` };
+        }
+        console.log("[processVideo] Transcription successful:", transcriptResult.text);
+        return { results: transcriptResult.text, audioPath };
+    }
+    console.log("[processVideo] Processing type not 'ai' or 'custom'. Returning completed status.");
+    return { results: "", audioPath };
 }
 async function extractYouTubeMetadata(url) {
     // Ignore any global/local yt-dlp config that could trigger downloads
@@ -392,9 +560,76 @@ async function getYouTubeChaptersFromApi(url) {
         }
         return out;
     }
-    catch {
-        return [];
+    catch { } // Ignore errors, return empty array
+    return [];
+}
+function parseFormattedChapters(text) {
+    const chapters = [];
+    if (!text)
+        return chapters;
+    const lines = text.split(/\r?\n/);
+    const chapterRegex = /^\* \*\*(.+?):\*\* (.+)/;
+    for (const line of lines) {
+        const match = line.trim().match(chapterRegex);
+        if (!match)
+            continue;
+        const header = match[1];
+        const description = match[2].trim();
+        // Timestamps can be M:S or H:M:S
+        const timeMatch = header.match(/^[\d:.-]+-[\d:.-]+\s+/);
+        if (!timeMatch)
+            continue;
+        const timeRange = timeMatch[0].trim();
+        const [startTimeStr, endTimeStr] = timeRange.split('-');
+        const title = header.substring(timeMatch[0].length).trim();
+        const startTime = parseTimestampTokenToSeconds(startTimeStr);
+        const endTime = parseTimestampTokenToSeconds(endTimeStr);
+        if (startTime !== null && endTime !== null) {
+            chapters.push({
+                title,
+                description,
+                startTime,
+                endTime,
+            });
+        }
     }
+    return chapters;
+}
+// Helper function to parse MM:SS or HH:MM:SS to seconds
+function parseTimestampToSeconds(timestamp) {
+    const parts = timestamp.split(':').map(Number);
+    if (parts.some(isNaN)) {
+        return null;
+    }
+    if (parts.length === 2) {
+        // MM:SS
+        return parts[0] * 60 + parts[1];
+    }
+    else if (parts.length === 3) {
+        // HH:MM:SS
+        return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    return null;
+}
+function parseCustomFormattedChapter(text) {
+    // 1. Remove (Star) and (New Line) tokens
+    let cleanedText = text.replace(/\(Star\)/g, '').replace(/\(New Line\)/g, '').trim();
+    // 2. Regex to match the pattern: timestamp title:description
+    const regex = /^(\d{1,2}:\d{2}-\d{1,2}:\d{2})\s*(.+?):(.+)$/;
+    const match = cleanedText.match(regex);
+    if (!match) {
+        return null;
+    }
+    const timeRange = match[1];
+    const titleWithColon = match[2];
+    const description = match[3].trim();
+    // Remove the colon from the title
+    const title = titleWithColon.replace(/:$/, '').trim();
+    // Parse timestamp
+    const [startTimeStr, endTimeStr] = timeRange.split('-');
+    const startTime = parseTimestampToSeconds(startTimeStr);
+    const endTime = parseTimestampToSeconds(endTimeStr);
+    return { startTime, endTime, title, description };
 }
 async function getYouTubeChapters(url) {
     // Use only the YouTube Data API (via description timestamps). No yt-dlp fallback.
@@ -443,12 +678,12 @@ async function getYouTubeTranscriptVtt(url) {
         const text = await res.text();
         return text || null;
     }
-    catch {
-        return null;
-    }
+    catch { } // Ignore errors
+    return null;
 }
 function runFfmpeg(argv) {
     const bin = FFMPEG_BIN || "ffmpeg";
+    console.log(`[ffmpeg] Using binary: ${bin} with args: [${argv.join(", ")}]`);
     return new Promise((resolve) => {
         const proc = (0, node_child_process_1.spawn)(bin, argv, { stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "";

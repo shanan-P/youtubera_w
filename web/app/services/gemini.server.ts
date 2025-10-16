@@ -1,6 +1,10 @@
 // Gemini PDF text extraction service
 import * as fs from 'fs/promises';
+import { env } from 'node:process';
 import { parseFile } from 'music-metadata';
+import { suggestSegmentsFromTranscript } from './ai.server';
+import { getYouTubeTranscriptVtt, vttToPlainTextWithTimestamps } from './video.server';
+
 
 // Custom logging array
 const logMessages: string[] = [];
@@ -12,8 +16,8 @@ function customLog(...args: any[]) {
 }
 
 // Configuration
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = "gemini-2.5-flash-lite";
+const GEMINI_API_KEY = env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = env.GEMINI_MODEL || "gemini-1.5-flash-latest";
 
 if (!GEMINI_API_KEY) {
   customLog("GEMINI_API_KEY is not set. Add it to .env to use Gemini features.");
@@ -227,32 +231,61 @@ export async function formatWithGemini(
 export async function getTopicsFromAudio(
   audioPath: string,
   mode: 'segmentation' | 'transcription',
-  customQuery?: string
+  customQuery?: string,
+  url?: string
 ): Promise<{ text?: string; error?: string }> {
-  console.log("Entering getTopicsFromAudio with audioPath:", audioPath, "and mode:", mode, "and customQuery:", customQuery);
+  console.log("Entering getTopicsFromAudio with audioPath:", audioPath, "and mode:", mode, "and customQuery:", customQuery, "and url:", url);
 
   if (!GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY is not configured");
     return { error: "GEMINI_API_KEY is not configured" };
   }
 
+  if (mode === 'segmentation') {
+    let transcript = null;
+    if (url) {
+      console.log("Segmentation mode with URL, attempting transcript-based segmentation.");
+      const vtt = await getYouTubeTranscriptVtt(url);
+      if (vtt) {
+        console.log("Successfully fetched VTT transcript.");
+        transcript = vttToPlainTextWithTimestamps(vtt);
+      }
+    } else {
+      console.log("Segmentation mode without URL, attempting to generate transcript from audio.");
+      const transcriptResult = await getTopicsFromAudio(audioPath, 'transcription', customQuery);
+      if (transcriptResult.text) {
+        transcript = transcriptResult.text;
+      }
+    }
+
+    if (transcript) {
+      const segments = await suggestSegmentsFromTranscript(url || '', transcript, customQuery);
+      return { text: JSON.stringify(segments) };
+    } else {
+      console.log("No transcript found, falling back to audio-based segmentation.");
+    }
+  }
+
   try {
     const { format } = await parseFile(audioPath);
     const duration = format.duration ? Math.round(format.duration) : 0;
 
+    const fileExt = audioPath.split('.').pop()?.toLowerCase() || 'flac';
+    const mimeType = `audio/${fileExt}`;
+
     const audioBuffer = await fs.readFile(audioPath);
-    const fileName = audioPath.split('/').pop() || 'audio.flac';
+    const fileName = audioPath.split(/[\\/]/).pop() || `audio.${fileExt}`;
     
     const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${GEMINI_API_KEY}&uploadType=media`;
     
     console.log("Initiating Gemini file upload to:", uploadUrl);
     
-    const audioBlob = new Blob([Uint8Array.from(audioBuffer).buffer], { type: 'audio/flac' });
+    const audioBlob = new Blob([Uint8Array.from(audioBuffer).buffer], { type: mimeType });
 
     const uploadResponse = await fetch(uploadUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'audio/flac', // Set the correct MIME type
+        'Content-Type': mimeType, // Set the correct MIME type
         'X-Goog-Upload-Protocol': 'raw', // Indicate raw upload
         'X-Goog-Upload-File-Name': fileName, // Provide file name
       },
@@ -296,7 +329,7 @@ export async function getTopicsFromAudio(
             { text: prompt },
             {
               fileData: {
-                mimeType: "audio/flac",
+                mimeType: mimeType,
                 fileUri: fileUri
               }
             },

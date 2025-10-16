@@ -40,7 +40,8 @@ export async function saveUploadedAudio(file: File, courseId: string): Promise<S
 export async function processAudio(
     audioSource: File,
     mode: 'segmentation' | 'transcription',
-    customQuery?: string
+    customQuery?: string,
+    url?: string
   ): Promise<{ results?: string; error?: string }> {
     console.log("--- Entering processAudio function ---");
   
@@ -60,7 +61,7 @@ export async function processAudio(
   
     if (mode === "segmentation" || mode === "transcription") {
       console.log("[processAudio] Calling getTopicsFromAudio with audioPath:", audioPath);
-      const topicsResult = await getTopicsFromAudio(audioPath, mode, customQuery);
+      const topicsResult = await getTopicsFromAudio(audioPath, mode, customQuery, url);
       console.log("[processAudio] getTopicsFromAudio returned:", topicsResult);
       if (topicsResult.error) {
         console.error("[processAudio] Gemini processing failed:", topicsResult.error);
@@ -72,4 +73,3 @@ export async function processAudio(
   
     return { results: "" };
   }
-  
