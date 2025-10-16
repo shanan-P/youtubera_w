@@ -312,10 +312,22 @@ export async function getTopicsFromAudio(
 
     const prompt =
       mode === 'transcription'
-        ? 'Transcribe the following audio. If the audio is not in English, please transcribe it and then translate the transcription to English. The output should be plain text with timestamps for each transcribed segment. For example: [00:00:01.000-00:00:04.000] Hello world'
+        ? 'Transcribe the following audio. If the audio is not in English, please transcribe it and then translate the transcription to English. The output MUST be in plain text with timestamps for each transcribed segment. For example: [00:00:01.000-00:00:04.000] Hello world. Do not include any other text, titles, or translations in the output.'
         : customQuery
         ? `Transcribe the following audio and answer the question: ${customQuery}`
-        : `You are an expert in analyzing audio content. Your task is to process the given audio file and generate a structured summary of its key topics. The total duration of the audio file is ${duration} seconds. Please ensure that all timestamps in your response are within this duration.`;
+        : `You are an expert in analyzing audio content. Your task is to process the entire audio file and generate a structured summary of its key topics. The total duration of the audio file is ${duration} seconds. Please ensure that all timestamps in your response are within this duration. Return strictly valid JSON with the following shape:
+{
+  "segments": [
+    { "title": string, "startSeconds": number, "endSeconds": number, "summary": string }
+  ]
+}
+Rules:
+- Process the entire audio file.
+- startSeconds < endSeconds
+- Prefer 3 to 12 segments depending on content length
+- Titles should be short nouns or phrases
+- summary is 1-2 sentences, helpful and specific
+- Output ONLY the JSON, no markdown, no commentary.`;
 
     console.log("Using prompt for Gemini:", prompt);
 
