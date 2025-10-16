@@ -108,7 +108,7 @@ export async function action({ request }: ActionFunctionArgs) {
 export default function Index() {
   const navigation = useNavigation();
   const isCreating = navigation.state === "submitting";
-  const [processingType, setProcessingType] = useState("ai");
+  const [processingType, setProcessingType] = useState("manual");
   const [formType, setFormType] = useState<"url" | "file">("url");
   const [fileType, setFileType] = useState("pdf");
   const [url, setUrl] = useState(""); // State for URL input
@@ -165,6 +165,17 @@ export default function Index() {
                     <input
                       type="radio"
                       name="processingType"
+                      value="manual"
+                      checked={processingType === "manual"}
+                      onChange={(e) => setProcessingType(e.target.value)}
+                      className="h-4 w-4 text-primary focus:ring-primary"
+                    />
+                    <span>Manual Timestamps</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="processingType"
                       value="ai"
                       checked={processingType === "ai"}
                       onChange={(e) => setProcessingType(e.target.value)}
@@ -187,17 +198,6 @@ export default function Index() {
                     <input
                       type="radio"
                       name="processingType"
-                      value="manual"
-                      checked={processingType === "manual"}
-                      onChange={(e) => setProcessingType(e.target.value)}
-                      className="h-4 w-4 text-primary focus:ring-primary"
-                    />
-                    <span>Manual Timestamps</span>
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name="processingType"
                       value="transcript"
                       checked={processingType === "transcript"}
                       onChange={(e) => setProcessingType(e.target.value)}
@@ -209,7 +209,8 @@ export default function Index() {
                 {processingType === "manual" && (
                   <textarea
                     name="manualTimestamps"
-                    placeholder="Paste timestamps here, e.g., 00:00 Intro\n01:23 Chapter 1"
+                    placeholder="Get timestamps from gemini.google.com. Paste timestamps here, e.g., 00:00 Intro
+01:23 Chapter 1"
                     className="w-full h-32 rounded-md border-gray-300 bg-subtle-bg px-4 py-2 text-text focus:border-primary focus:ring-primary"
                   />
                 )}
