@@ -312,7 +312,7 @@ export async function getTopicsFromAudio(
 
     const prompt =
       mode === 'transcription'
-        ? 'Transcribe the following audio. If the audio is not in English, please transcribe it and then translate the transcription to English.'
+        ? 'Transcribe the following audio. If the audio is not in English, please transcribe it and then translate the transcription to English. The output should be plain text with timestamps for each transcribed segment. For example: [00:00:01.000-00:00:04.000] Hello world'
         : customQuery
         ? `Transcribe the following audio and answer the question: ${customQuery}`
         : `You are an expert in analyzing audio content. Your task is to process the given audio file and generate a structured summary of its key topics. The total duration of the audio file is ${duration} seconds. Please ensure that all timestamps in your response are within this duration.`;
@@ -329,7 +329,7 @@ export async function getTopicsFromAudio(
             { text: prompt },
             {
               fileData: {
-                mimeType: mimeType,
+                mimeType: "audio/flac",
                 fileUri: fileUri
               }
             },
@@ -340,7 +340,7 @@ export async function getTopicsFromAudio(
         temperature: 0.2,
         topP: 0.95,
         topK: 40,
-        maxOutputTokens: 8192,
+        maxOutputTokens: 16384,
       },
     };
 

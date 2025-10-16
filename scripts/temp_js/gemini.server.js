@@ -37,6 +37,7 @@ exports.formatWithGemini = formatWithGemini;
 exports.getTopicsFromAudio = getTopicsFromAudio;
 // Gemini PDF text extraction service
 const fs = __importStar(require("fs/promises"));
+const node_process_1 = require("node:process");
 const music_metadata_1 = require("music-metadata");
 const ai_server_1 = require("./ai.server");
 const video_server_1 = require("./video.server");
@@ -48,8 +49,8 @@ function customLog(...args) {
     console.log(...args); // Still log to console for local debugging if visible
 }
 // Configuration
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = "gemini-1.5-flash-latest";
+const GEMINI_API_KEY = node_process_1.env.GEMINI_API_KEY || "";
+const GEMINI_MODEL = node_process_1.env.GEMINI_MODEL || "gemini-1.5-flash-latest";
 if (!GEMINI_API_KEY) {
     customLog("GEMINI_API_KEY is not set. Add it to .env to use Gemini features.");
 }
@@ -288,7 +289,7 @@ async function getTopicsFromAudio(audioPath, mode, customQuery, url) {
         }
         const fileUri = uploadResult.file.uri;
         const prompt = mode === 'transcription'
-            ? 'Transcribe the following audio. If the audio is not in English, please transcribe it and then translate the transcription to English.'
+            ? 'Transcribe the following audio. If the audio is not in English, please transcribe it and then translate the transcription to English. The output should be plain text with timestamps for each transcribed segment. For example: [00:00:01.000-00:00:04.000] Hello world'
             : customQuery
                 ? `Transcribe the following audio and answer the question: ${customQuery}`
                 : `You are an expert in analyzing audio content. Your task is to process the given audio file and generate a structured summary of its key topics. The total duration of the audio file is ${duration} seconds. Please ensure that all timestamps in your response are within this duration.`;
@@ -302,7 +303,7 @@ async function getTopicsFromAudio(audioPath, mode, customQuery, url) {
                         { text: prompt },
                         {
                             fileData: {
-                                mimeType: mimeType,
+                                mimeType: "audio/flac",
                                 fileUri: fileUri
                             }
                         },
@@ -313,7 +314,7 @@ async function getTopicsFromAudio(audioPath, mode, customQuery, url) {
                 temperature: 0.2,
                 topP: 0.95,
                 topK: 40,
-                maxOutputTokens: 8192,
+                maxOutputTokens: 16384,
             },
         };
         console.log("Sending generation request to Gemini...");
