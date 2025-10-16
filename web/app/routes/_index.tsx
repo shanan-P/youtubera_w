@@ -118,6 +118,31 @@ export default function Index() {
     return url.includes("youtube.com") || url.includes("youtu.be");
   }, [url]);
 
+  const [isCopied, setIsCopied] = useState(false);
+  const geminiPromptText = useMemo(() => `From the following YouTube video transcript, extract timestamps and topics.
+The video is available at: ${url}
+
+Please provide the output as a list of timestamps and titles. Return strictly valid JSON with the following shape:
+{
+  "segments": [
+    { "title": string, "startSeconds": number, "endSeconds": number, "summary": string }
+  ]
+}
+Rules:
+- Titles should be short and descriptive.
+- The summary should be 1-2 sentences.
+- Output ONLY the JSON, with no surrounding text or markdown.
+
+`, [url]);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(geminiPromptText).then(() => {
+      setIsCopied(true);
+      const timer = setTimeout(() => setIsCopied(false), 2000);
+      return () => clearTimeout(timer);
+    });
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen text-center">
       <h1 className="text-5xl font-bold">Welcome to Youtubera</h1>
@@ -207,12 +232,23 @@ export default function Index() {
                   </label>
                 </div>
                 {processingType === "manual" && (
-                  <textarea
-                    name="manualTimestamps"
-                    placeholder="Get timestamps from gemini.google.com. Paste timestamps here, e.g., 00:00 Intro
-01:23 Chapter 1"
-                    className="w-full h-32 rounded-md border-gray-300 bg-subtle-bg px-4 py-2 text-text focus:border-primary focus:ring-primary"
-                  />
+                  <>
+                    <div className="text-sm text-sub-text text-center">
+                      <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); handleCopy(); }}
+                        className="text-main-accent hover:underline"
+                      >
+                        {isCopied ? "Copied✅" : "Copy Prompt for Gemini"}
+                      </a>, visit the <a href="https://gemini.google.com" target="_blank" rel="noopener noreferrer" className="text-main-accent hover:underline">gemini.google.com</a> and paste the JSON below.
+                    </div>
+                    <textarea
+                      name="manualTimestamps"
+                      placeholder={`Paste the JSON output from Gemini here.
+e.g., { "segments": [ { "title": "Intro", "startSeconds": 0, "endSeconds": 33, "summary": "..." } ] }`}
+                      className="w-full h-32 rounded-md border-gray-300 bg-subtle-bg px-4 py-2 text-text focus:border-primary focus:ring-primary"
+                    />
+                  </>
                 )}
               </>
             )}

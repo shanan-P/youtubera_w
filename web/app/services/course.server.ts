@@ -85,24 +85,36 @@ function parseTimestampToSeconds(token: string): number | null {
 
 export function parseTimestampSummary(text: string): TimestampParseResult {
   const groups: ParsedGroup[] = [];
-  const lines = text.split('\n').filter(line => line.trim().length > 0);
+  let parsed: any = null;
+  const cleanedText = text.trim();
 
-  const lineRegex = /^\*\s+\*\*(\d{2}:\d{2}(?:\:\d{2})?)\s+-\s+(\d{2}:\d{2}(?:\:\d{2})?):\*\*\s+(.*)$/;
-
-  for (const line of lines) {
-    const match = line.match(lineRegex);
+  try {
+    parsed = JSON.parse(cleanedText);
+  } catch {
+    const match = /```(?:json)?\n([\s\S]*?)\n```/.exec(cleanedText);
     if (match) {
-      const start = parseTimestampToSeconds(match[1]);
-      const end = parseTimestampToSeconds(match[2]);
-      const desc = match[3].trim();
+      try {
+        parsed = JSON.parse(match[1]);
+      } catch {}
+    }
+  }
 
-      if (start !== null && end !== null) {
-        const group: ParsedGroup = {
-          title: desc,
+  const segments = parsed?.segments;
+
+  if (Array.isArray(segments)) {
+    for (const segment of segments) {
+      const start = Number(segment?.startSeconds);
+      const end = Number(segment?.endSeconds);
+      const title = String(segment?.title || "Segment");
+      const summary = segment?.summary ? String(segment.summary) : undefined;
+
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+        groups.push({
+          title: title,
+          desc: summary,
           firstStart: start,
-          items: [{ title: desc, start: start, end: end, desc: desc }]
-        };
-        groups.push(group);
+          items: [{ title: title, start: start, end: end, desc: summary }]
+        });
       }
     }
   }
