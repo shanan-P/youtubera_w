@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import { redirect } from "@remix-run/node";
 import { prisma } from "~/utils/db.server";
 import { getSession, commitSession } from "~/utils/session.server";
+import { getCache, delCache } from "~/utils/redis.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
@@ -10,6 +11,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const session = await getSession(request.headers.get("Cookie") ?? undefined);
   const expectedState = session.get("oauth_state_google");
   const redirectTo = session.get("oauth_redirectTo") ?? "/profile";
+  const sessionId = session.id;
 
   if (!code || !state || !expectedState || state !== expectedState) {
     return redirect("/login");
@@ -78,6 +80,27 @@ export async function loader({ request }: LoaderFunctionArgs) {
         isVerified: true
       }
     });
+  }
+
+  // Claim anonymous courses
+  if (sessionId) {
+    const anonymousCoursesKey = `anonymous_courses:${sessionId}`;
+    const courseIds = (await getCache(anonymousCoursesKey)) as string[] | null;
+    if (Array.isArray(courseIds) && courseIds.length > 0) {
+      try {
+        await prisma.course.updateMany({
+          where: {
+            id: { in: courseIds },
+            createdById: null, // Only claim orphaned courses
+          },
+          data: { createdById: user.id },
+        });
+        await delCache(anonymousCoursesKey); // Clean up the temporary record
+      } catch (e) {
+        console.error("Failed to claim anonymous courses:", e);
+        // Don't block login if claiming fails. The cleanup job will handle old courses.
+      }
+    }
   }
 
   // Persist login on the SAME session that stored the OAuth state

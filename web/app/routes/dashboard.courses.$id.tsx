@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Form, Link, Outlet, useActionData, useLoaderData, useNavigation, useParams, useSearchParams } from '@remix-run/react';
 import { json, redirect, type LoaderFunctionArgs, type ActionFunctionArgs } from '@remix-run/node';
-import { requireUser } from "~/utils/auth.server";
+import { getSession } from "~/utils/session.server";
+import { getUserId, requireUser } from "~/utils/auth.server";
 import { prisma } from "~/utils/db.server";
 import { formatWithGemini } from '~/services/gemini.server';
 import * as path from 'path';
@@ -24,6 +25,7 @@ import { generateShortForEntry } from '~/services/shorts.server';
 import type { ProcessingType } from "@prisma/client";
 import { extractTextFromPdfWithAdobe } from "~/services/adobe-extract.server";
 import { createPdfFromHtml } from '~/utils/pdf-utils';
+import { getCache, setCache } from "~/utils/redis.server";
 
 // Define a custom Course type that includes our custom fields
 interface Course {
@@ -341,12 +343,44 @@ function parseDates<T>(obj: T): T {
 }
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  await requireUser(request);
   const id = params.id || "";
   if (!id) return json({ error: "Missing course id" }, { status: 400 });
+
+  const session = await getSession(request.headers.get("Cookie"));
+  const userId = await getUserId(request);
+  const sessionId = session.id;
+
+  const url = new URL(request.url);
+  const shouldClaim = url.searchParams.get("claim_anonymous") === "true";
+
+  // If this is the first load for an anonymous course, claim it for the session.
+  if (shouldClaim && !userId) {
+    const key = `anonymous_courses:${sessionId}`;
+    const courses = (await getCache(key)) || [];
+    if (!Array.isArray(courses) || !courses.includes(id)) {
+      const courseList = Array.isArray(courses) ? courses : [];
+      await setCache(key, [...courseList, id], 60 * 60 * 24 * 7); // Cache for 7 days
+    }
+  }
+
+  // Check if this is an anonymous course for the current session
+  const anonymousCoursesKey = `anonymous_courses:${sessionId}`;
+  const anonymousCourseIds = (await getCache(anonymousCoursesKey)) as string[] | null;
+  const isAnonymousCourse = anonymousCourseIds?.includes(id) ?? false;
+
+  // If it's not an anonymous course and the user is not logged in, redirect to login.
+  // This is the main protection gate.
+  if (!isAnonymousCourse && !userId) {
+    await requireUser(request); // This will throw the redirect
+  }
   
   const course = await getCourseById(id);
   if (!course) return json({ error: "Course not found" }, { status: 404 });
+
+  // If the course belongs to someone else and it's not the anonymous one we just created, deny access.
+  if (course.createdById && course.createdById !== userId && !isAnonymousCourse) {
+    return json({ error: "You do not have permission to view this course." }, { status: 403 });
+  }
   
   // Parse dates in the course object
   const parsedCourse = parseDates(course);

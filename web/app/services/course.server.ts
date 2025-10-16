@@ -11,6 +11,7 @@ import {
 import { saveTxtFromUrl, saveUploadedPdf } from "../services/pdf.server";
 import { extractTextFromPdfWithAdobe } from "../services/adobe-extract.server";
 import { formatWithGemini } from "./gemini.server";
+import { getCache, setCache } from "~/utils/redis.server";
 import { unstable_createFileUploadHandler, unstable_parseMultipartFormData } from "@remix-run/node";
 import { saveUploadedAudio, processAudio } from "./audio.server";
 
@@ -111,7 +112,8 @@ export function parseTimestampSummary(text: string): TimestampParseResult {
 // --- CRUD functions ---
 
 export async function createCourse(data: CreateCourseInput): Promise<Course> {
-  const course = await prisma.course.create({ data });
+  const { sessionId, ...courseData } = data;
+  const course = await prisma.course.create({ data: courseData });
 
   await prisma.$executeRaw`
     UPDATE "Course"
@@ -142,8 +144,13 @@ export async function getCourseById(id: string) {
   });
 }
 
-export async function listCourses() {
-  return prisma.course.findMany({ orderBy: { createdAt: "desc" } });
+export async function listCourses(userId?: string) {
+  return prisma.course.findMany({
+    where: {
+      createdById: userId,
+    },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
 export async function updateCourse(id: string, data: UpdateCourseInput) {
@@ -170,7 +177,8 @@ export async function createCourseFromUrl(
   userId?: string,
   sourceType: "youtube" | "youtube_text" = "youtube",
   timestampsText?: string,
-  segmentation: "chapter" | "manual" | "audio" = "audio"
+  segmentation: "chapter" | "manual" | "audio" = "audio",
+  sessionId?: string
 ) {
   const isYoutube = isPlaylistUrl(url) || url.includes("youtube.com") || url.includes("youtu.be");
   const isPdf = url.toLowerCase().endsWith(".pdf");
@@ -198,14 +206,15 @@ export async function createCourseFromUrl(
     };
   }
 
-  return createCourseFromSource(source, userId);
+  return createCourseFromSource(source, userId, sessionId);
 }
 
 // --- Main function ---
 
 export async function createCourseFromSource(
   source: CourseSource,
-  userId?: string
+  userId?: string,
+  sessionId?: string
 ): Promise<{ jobId: string; courseId?: string; noChapters?: boolean; error?: string }> {
   // NOTE: This is a stub that simulates job creation as per `design.md` and `tasks.md`.
   // Real implementation will enqueue a job (Bull) and call video/pdf services.
@@ -230,7 +239,8 @@ export async function createCourseFromSource(
             thumbnailUrl: thumb,
             sourceUrl: source.url,
             totalDuration: totalDur ? Math.round(totalDur) : null,
-            createdById: userId
+            createdById: userId,
+            sessionId: sessionId,
           });
           // Create one chapter per playlist video (skeleton)
           if (pl && pl.entries.length > 0) {
@@ -272,7 +282,8 @@ export async function createCourseFromSource(
               thumbnailUrl: thumb,
               sourceUrl: source.url,
               totalDuration: duration ? Math.round(duration) : null,
-              createdById: userId
+              createdById: userId,
+              sessionId: sessionId,
             });
             const parent = await prisma.chapter.create({
               data: {
@@ -312,7 +323,8 @@ export async function createCourseFromSource(
               thumbnailUrl: thumb,
               sourceUrl: source.url,
               totalDuration: duration ? Math.round(duration) : null,
-              createdById: userId
+              createdById: userId,
+              sessionId: sessionId,
             });
             // Manual segmentation: parse pasted timestamp summary and create Chapters/ShortVideos
             const manualText = (source.timestampsText || "").trim();
@@ -396,7 +408,8 @@ export async function createCourseFromSource(
               thumbnailUrl: thumb,
               sourceUrl: source.url,
               totalDuration: duration ? Math.round(duration) : null,
-              createdById: userId
+              createdById: userId,
+              sessionId: sessionId,
             });
 
             const { processVideo } = await import('./video.server');
@@ -494,7 +507,8 @@ export async function createCourseFromSource(
           contentType: (isPl ? "youtube_playlist" : "youtube_video") as ContentType,
           description: "Created from YouTube URL (fallback)",
           sourceUrl: source.url,
-          createdById: userId
+          createdById: userId,
+          sessionId: sessionId,
         });
         return { jobId, courseId: created.id };
       }
@@ -527,7 +541,8 @@ export async function createCourseFromSource(
         totalDuration: duration ? Math.round(duration) : null,
         createdById: userId,
         textContent: result.results,
-        filePath: result.audioPath
+        filePath: result.audioPath,
+        sessionId: sessionId,
       });
 
       return { jobId, courseId: created.id };
@@ -543,7 +558,8 @@ export async function createCourseFromSource(
         title: fallbackTitle,
         contentType: "pdf_textbook" as ContentType,
         sourceUrl: url,
-        createdById: userId
+        createdById: userId,
+        sessionId: sessionId,
       });
       
       try {
@@ -584,7 +600,8 @@ export async function createCourseFromSource(
       const created = await createCourse({
         title: file.name,
         contentType: isPdf ? 'pdf_textbook' : (isVideo ? 'uploaded_video' : (isAudio ? (audioProcessing === 'segmentation' ? 'audiobook' : 'audiobook_text') : 'uploaded_video')) as ContentType,
-        createdById: userId
+        createdById: userId,
+        sessionId: sessionId,
       });
       
       try {

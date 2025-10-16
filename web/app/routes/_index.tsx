@@ -2,12 +2,14 @@ import { Form, Link, redirect, useNavigation } from "@remix-run/react";
 import { Button } from "~/components/Button";
 import type { ActionFunctionArgs, UploadHandler } from "@remix-run/node";
 import { json, unstable_composeUploadHandlers, unstable_createFileUploadHandler, unstable_createMemoryUploadHandler, unstable_parseMultipartFormData } from "@remix-run/node";
+import { getSession } from "~/utils/session.server";
 import { createCourseFromUrl, createCourseFromSource } from "~/services/course.server";
 import { getUserId } from "~/utils/auth.server";
 import { useState, useMemo } from "react";
 
 export async function action({ request }: ActionFunctionArgs) {
   console.log("--- ENTERING action function ---");
+  const session = await getSession(request.headers.get("Cookie"));
   const userId = await getUserId(request);
   const contentType = request.headers.get("Content-Type") || "";
 
@@ -41,7 +43,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
     const result = await createCourseFromSource(
       { type: "file", file, fileType: fileType as string, audioProcessing },
-      userId ?? undefined
+      userId ?? undefined,
+      session.id
     );
 
     if (result.error) {
@@ -52,6 +55,10 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ error: "Failed to create course" }, { status: 500 });
     }
 
+    // For anonymous users, pass the courseId in the URL to be claimed by the session on the next page.
+    if (!userId) {
+      return redirect(`/dashboard/courses/${result.courseId}?claim_anonymous=true`);
+    }
     return redirect(`/dashboard/courses/${result.courseId}`);
   } else {
     // Handle URL submission
@@ -75,8 +82,11 @@ export async function action({ request }: ActionFunctionArgs) {
       url,
       userId ?? undefined,
       processingType === "transcript" ? "youtube_text" : "youtube",
-      processingType === "manual" ? (manualTimestamps as string) : undefined,
-      segmentation
+      processingType === "manual"
+        ? (manualTimestamps as string)
+        : undefined,
+      segmentation,
+      session.id
     );
 
     if (result.error) {
@@ -87,6 +97,10 @@ export async function action({ request }: ActionFunctionArgs) {
       return json({ error: "Failed to create course" }, { status: 500 });
     }
 
+    // For anonymous users, pass the courseId in the URL to be claimed by the session on the next page.
+    if (!userId) {
+      return redirect(`/dashboard/courses/${result.courseId}?claim_anonymous=true`);
+    }
     return redirect(`/dashboard/courses/${result.courseId}`);
   }
 }

@@ -2,8 +2,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs, MetaFunction } from "@remi
 import { json, redirect } from "@remix-run/node";
 import { Form, Link, useActionData, useFetcher, useLoaderData, useNavigate, useLocation, useRevalidator } from "@remix-run/react";
 import { Button } from "~/components/Button";
-import { useEffect, useRef, useState, useMemo } from "react";
-import { requireUser } from "~/utils/auth.server";
+import { useEffect, useRef, useState } from "react";
+import { getUserId, requireUser } from "~/utils/auth.server";
 import type { Course } from '@prisma/client';
 import { 
   listCourses, 
@@ -19,8 +19,8 @@ import { processVideo, processAudio } from '~/services';
 export const meta: MetaFunction = () => ([{ title: "Courses - Dashboard | Youtubera" }]);
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  await requireUser(request);
-  const courses = await listCourses();
+  const userId = await getUserId(request);
+  const courses = userId ? await listCourses(userId) : [];
   const url = new URL(request.url);
   const updated = url.searchParams.get("updated") === "1";
   const noChapters = url.searchParams.get("noChapters") === "1";
@@ -207,7 +207,7 @@ export default function CoursesDashboard() {
   const errorTimeoutRef = useRef<number | null>(null);
   const lastDeleteHandledRef = useRef<string | null>(null);
   const [search, setSearch] = useState<string>("");
-  const searchFetcher = useFetcher();
+  const searchFetcher = useFetcher<{ courses: Course[] }>();
   
   useEffect(() => {
     if (search.trim() === "") {
