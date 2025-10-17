@@ -251,6 +251,8 @@ export async function downloadYouTubeVideo(url: string): Promise<{
   }
 
   const id = info?.id || randomUUID();
+  const bestThumbnail = info?.thumbnails?.find((t: any) => t.id === 'maxresdefault')?.url || info?.thumbnail;
+
   const outDir = getWritableDir("videos", id);
   const outFile = join(outDir, `${id}.mp4`);
 
@@ -263,7 +265,7 @@ export async function downloadYouTubeVideo(url: string): Promise<{
       duration: info?.duration ?? null,
       uploader: info?.uploader ?? "",
       uploadDate: info?.upload_date ?? "",
-      thumbnailUrl: info?.thumbnail ?? ""
+      thumbnailUrl: bestThumbnail ?? ""
     };
     return { ok: true, videoPath: outFile, publicUrl, metadata };
   }
@@ -323,7 +325,7 @@ export async function downloadYouTubeVideo(url: string): Promise<{
     duration: info?.duration ?? null,
     uploader: info?.uploader ?? "",
     uploadDate: info?.upload_date ?? "",
-    thumbnailUrl: info?.thumbnail ?? ""
+    thumbnailUrl: bestThumbnail ?? ""
   };
   return { ok: true, videoPath: outFile, publicUrl, metadata };
 }
@@ -739,9 +741,8 @@ export async function clipVideoSegment(
   sourcePath: string,
   startSeconds: number,
   endSeconds: number,
-  outPath: string,
-  thumbnailOutPath?: string
-): Promise<{ ok: boolean; stderr?: string; thumbnail?: boolean; error?: string }> {
+  outPath: string
+): Promise<{ ok: boolean; stderr?: string; error?: string }> {
   ensureDir(dirname(outPath));
   const start = Math.max(0, Math.floor(startSeconds));
   const end = Math.max(0, Math.floor(endSeconds));
@@ -770,23 +771,7 @@ export async function clipVideoSegment(
     outPath
   ];
   const res = await runFfmpeg(args);
-  let thumbOk = false;
-  if (thumbnailOutPath) {
-    ensureDir(dirname(thumbnailOutPath));
-    const tArgs = [
-      "-y",
-      "-ss",
-      String(Math.max(0, start + Math.floor(duration / 3))),
-      "-i",
-      sourcePath,
-      "-frames:v",
-      "1",
-      thumbnailOutPath
-    ];
-    const tRes = await runFfmpeg(tArgs);
-    thumbOk = tRes.ok;
-  }
-  return { ok: res.ok, stderr: res.stderr, thumbnail: thumbOk };
+  return { ok: res.ok, stderr: res.stderr };
 }
 
 export function isPlaylistUrl(url: string) {
@@ -818,6 +803,7 @@ export async function extractYouTubePlaylist(url: string): Promise<PlaylistInfo 
     .map((e: any) => {
       const vid = e?.id || e?.video_id || e?.extractor_id || e?.extractor_key;
       const vidUrl = e?.webpage_url || e?.url || (vid ? `https://www.youtube.com/watch?v=${vid}` : null);
+      const bestThumbnail = e?.thumbnails?.find((t: any) => t.id === 'maxresdefault')?.url || e?.thumbnail;
       if (!vid || !vidUrl) return null;
       return {
         id: String(vid),
@@ -825,7 +811,7 @@ export async function extractYouTubePlaylist(url: string): Promise<PlaylistInfo 
         url: String(vidUrl),
         duration: e?.duration ?? null,
         uploader: e?.uploader ?? null,
-        thumbnailUrl: e?.thumbnail ?? (e?.thumbnails?.[0]?.url ?? null)
+        thumbnailUrl: bestThumbnail ?? (e?.thumbnails?.[0]?.url ?? null)
       } as PlaylistEntry;
     })
     .filter(Boolean) as PlaylistEntry[];

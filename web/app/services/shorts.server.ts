@@ -1,5 +1,5 @@
 import { prisma } from "~/utils/db.server";
-import { clipVideoSegment, downloadYouTubeVideo } from "~/services";
+import { clipVideoSegment, downloadYouTubeVideo, extractYouTubeMetadata } from "~/services";
 import { existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 
@@ -28,6 +28,18 @@ function localPathFromPublicUrl(url: string) {
 export function generateShortTitleStub(originalTitle?: string) {
   const base = originalTitle?.trim() || "Short Clip";
   return base.length > 80 ? `${base.slice(0, 77)}...` : base;
+}
+
+function getYouTubeVideoId(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) return u.pathname.split("/")[1];
+    if (u.searchParams.has("v")) return u.searchParams.get("v");
+  } catch {}
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  return (match && match[2].length === 11) ? match[2] : null;
 }
 
 export async function generateShortForEntry(shortId: string) {
@@ -78,23 +90,27 @@ export async function generateShortForEntry(shortId: string) {
   const { dir, clipAbs, thumbAbs, clipUrl, thumbUrl } = publicShortsPaths(short.id);
   ensureDir(dir);
 
+  // Determine the best thumbnail URL before clipping
+  const videoId = getYouTubeVideoId(short.chapter?.course?.sourceUrl || short.videoUrl);
+  const youtubeThumbnailUrl = videoId ? `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg` : null;
+
   const res = await clipVideoSegment(
     sourcePath,
     Math.max(0, Math.floor(short.startTime)),
     Math.max(0, Math.floor(short.endTime)),
-    clipAbs,
-    thumbAbs
+    clipAbs
   );
   if (!res.ok) {
     return { ok: false as const, error: res.error || res.stderr || "ffmpeg failed" };
   }
+
 
   // Update DB with URLs
   const updated = await prisma.shortVideo.update({
     where: { id: short.id },
     data: {
       downloadUrl: clipUrl,
-      thumbnailUrl: res.thumbnail ? thumbUrl : short.thumbnailUrl,
+      thumbnailUrl: youtubeThumbnailUrl || short.thumbnailUrl,
       // fill duration if missing
       duration:
         short.duration != null
@@ -127,7 +143,7 @@ export async function generateShortForEntry(shortId: string) {
       const baseName = `${courseTitle} - ${shortTitle}`.replace(/[ .]+$/g, "");
       const destMp4 = join(exportDir, `${baseName || updated.id}.mp4`);
       copyFileSync(clipAbs, destMp4);
-      if (res.thumbnail) {
+      if (existsSync(thumbAbs)) {
         const destJpg = join(exportDir, `${baseName || updated.id}.jpg`);
         try { copyFileSync(thumbAbs, destJpg); } catch {}
       }

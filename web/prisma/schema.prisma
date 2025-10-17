@@ -57,6 +57,18 @@ model Course {
   posts         Post[]
   formattedVersions FormattedVersion[]
   search_vector     Unsupported("tsvector")?
+  videoMarkers      VideoMarker[]
+}
+
+model VideoMarker {
+  id           String  @id @default(uuid())
+  courseId     String
+  course       Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  timestamp    Int
+  description  String
+  thumbnailUrl String?
+
+  @@index([courseId])
 }
 
 model FormattedVersion {

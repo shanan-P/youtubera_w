@@ -122,6 +122,64 @@ export function parseTimestampSummary(text: string): TimestampParseResult {
   return { groups };
 }
 
+async function createVideoMarkersFromYouTube(courseId: string, videoUrl: string, duration: number) {
+  const videoId = extractVideoId(videoUrl);
+  if (!videoId) {
+    return;
+  }
+
+  const timestamps = {
+    "Start": 0,
+    "Middle": Math.floor(duration / 4),
+    "Thumbnail": Math.floor(duration / 2),
+    "End": Math.floor(duration) - 1,
+  };
+
+  const thumbnailUrlBase = `https://i.ytimg.com/vi_webp/${videoId}`;
+  const thumbnailUrls = {
+    "Start": `${thumbnailUrlBase}/maxres1.webp`,
+    "Middle": `${thumbnailUrlBase}/maxres2.webp`,
+    "Thumbnail": `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+    "End": `${thumbnailUrlBase}/maxres3.webp`,
+  }
+
+  for (const [description, timestamp] of Object.entries(timestamps)) {
+    await prisma.videoMarker.create({
+      data: {
+        courseId,
+        timestamp,
+        description,
+        thumbnailUrl: thumbnailUrls[description as keyof typeof thumbnailUrls],
+      },
+    });
+  }
+}
+
+function extractVideoId(url: string): string | null {
+  try {
+    const u = new URL(url);
+    // Standard watch URL
+    const v = u.searchParams.get("v");
+    if (v) return v;
+    // youtu.be short
+    if (u.hostname.endsWith("youtu.be")) {
+      const id = u.pathname.split("/").filter(Boolean)[0];
+      if (id) return id;
+    }
+    // embed
+    if (/youtube\\.com$/i.test(u.hostname) && u.pathname.startsWith("/embed/")) {
+      const id = u.pathname.split("/")[2];
+      if (id) return id;
+    }
+    // shorts
+    if (/youtube\\.com$/i.test(u.hostname) && u.pathname.startsWith("/shorts/")) {
+      const id = u.pathname.split("/")[2];
+      if (id) return id;
+    }
+  } catch {}
+  return null;
+}
+
 // --- CRUD functions ---
 
 export async function createCourse(data: CreateCourseInput): Promise<Course> {
@@ -152,7 +210,8 @@ export async function getCourseById(id: string) {
         }
       },
       posts: true,
-      formattedVersions: true
+      formattedVersions: true,
+      videoMarkers: { orderBy: { timestamp: "asc" } }
     }
   });
 }
@@ -268,6 +327,9 @@ export async function createCourseFromSource(
                   orderIndex: idx++
                 }
               });
+              if (entry.duration) {
+                await createVideoMarkersFromYouTube(created.id, entry.url, entry.duration);
+              }
             }
           }
           return { jobId, courseId: created.id };
@@ -298,6 +360,9 @@ export async function createCourseFromSource(
               createdById: userId,
               sessionId: sessionId,
             });
+            if (duration) {
+              await createVideoMarkersFromYouTube(created.id, source.url, duration);
+            }
             const parent = await prisma.chapter.create({
               data: {
                 courseId: created.id,
@@ -339,6 +404,9 @@ export async function createCourseFromSource(
               createdById: userId,
               sessionId: sessionId,
             });
+            if (duration) {
+              await createVideoMarkersFromYouTube(created.id, source.url, duration);
+            }
             // Manual segmentation: parse pasted timestamp summary and create Chapters/ShortVideos
             const manualText = (source.timestampsText || "").trim();
             const totalDur = duration ? Math.max(0, Math.floor(duration)) : null;
@@ -424,6 +492,10 @@ export async function createCourseFromSource(
               createdById: userId,
               sessionId: sessionId,
             });
+
+            if (duration) {
+              await createVideoMarkersFromYouTube(created.id, source.url, duration);
+            }
 
             const { processVideo } = await import('./video.server');
             const result = await processVideo(source.url, "ai");

@@ -44,10 +44,10 @@ interface Course {
   createdAt: Date | string;
   updatedAt: Date | string;
   userId: string;
-  chapters: Array<{ 
+  chapters: Array < {
     id: string;
     title: string;
-    shortVideos: Array<{ 
+    shortVideos: Array < {
       id: string;
       title: string;
       startTime: number | null;
@@ -63,22 +63,28 @@ interface Course {
       createdAt: Date | string;
     }>;
   }>;
-  formattedVersions: Array<{ 
+  formattedVersions: Array < {
     id: string;
     courseId: string;
     content: string;
     version: number;
     createdAt: Date | string;
   }>;
+  videoMarkers: Array < {
+    id: string;
+    timestamp: number;
+    description: string;
+    thumbnailUrl: string | null;
+  }>;
 };
 
 interface CourseWithExtras extends Omit<Course, 'chapters' | 'createdAt' | 'updatedAt'> {
   filePath: string | null;
   textContent: string | null;
-  chapters: Array<{ 
+  chapters: Array < {
     id: string;
     title: string;
-    shortVideos: Array<{ 
+    shortVideos: Array < {
       id: string;
       title: string;
       startTime: number | null;
@@ -111,7 +117,7 @@ interface CodeComponentProps {
   node?: any;
   inline?: boolean;
   className?: string;
-  children?: React.ReactNode;  
+  children?: React.ReactNode;
   [key: string]: any;
 }
 
@@ -173,8 +179,8 @@ const components: Components = {
             return (
               <div 
                 className={`mb-4 ${className}`}
-                {...safeProps as React.HTMLAttributes<HTMLDivElement>}
-              >
+                {...safeProps as React.HTMLAttributes<HTMLDivElement>
+              }>
                 {children}
               </div>
             );
@@ -205,7 +211,7 @@ const components: Components = {
 type Chapter = {
   id: string;
   title: string;
-  shortVideos?: Array<{ 
+  shortVideos?: Array < {
     id: string;
     title: string;
     startTime: number | null;
@@ -288,10 +294,10 @@ interface ActionData {
 interface CourseWithExtras extends Omit<Course, 'chapters' | 'createdAt' | 'updatedAt'> {
   filePath: string | null;
   textContent: string | null;
-  chapters: Array<{ 
+  chapters: Array < {
     id: string;
     title: string;
-    shortVideos: Array<{ 
+    shortVideos: Array < {
       id: string;
       title: string;
       startTime: number | null;
@@ -535,7 +541,21 @@ export default function CourseDetailRoute() {
   const [showUpdated, setShowUpdated] = useState(searchParams.get("updated") === "1");
   const [showOutline, setShowOutline] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
-  
+
+  // Type guard to check if data has course property
+  const hasCourse = (data: any): data is { course: Course } => {
+    return 'course' in data && !('error' in data);
+  };
+
+  // Shuffle the video markers once on component mount
+  const shuffledMarkers = useMemo(() => {
+    if (hasCourse(data) && data.course.videoMarkers) {
+      // Create a copy before shuffling to avoid mutating the original array
+      return [...data.course.videoMarkers].sort(() => Math.random() - 0.5);
+    }
+    return [];
+  }, [data]);
+
   useEffect(() => {
     if (searchParams.get("updated") === "1") {
       setShowUpdated(true);
@@ -970,6 +990,48 @@ export default function CourseDetailRoute() {
           <p className="rounded border border-gray-200 p-3 text-sm opacity-70 dark:border-gray-800">No chapters yet.</p>
         )}
 
+        {course.videoMarkers && course.videoMarkers.length > 0 && (
+          <div className="space-y-4 mt-6">
+            <h3 className="text-xl font-semibold">Visual Moments</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {shuffledMarkers.map((marker) => {
+                const videoId = getYouTubeVideoId(course.sourceUrl);
+                return (
+                  <div
+                    key={marker.id} 
+                    className="rounded border border-gray-200 p-4 dark:border-gray-800 block"
+                  >
+                    <img 
+                      src={marker.thumbnailUrl || (videoId ? `https://img.youtube.com/vi/${videoId}/default.jpg` : '/placeholder.png')}
+                      alt={`Visual moment: ${marker.description}`}
+                      className="w-full h-auto rounded-md"
+                      onError={(e) => {
+                        const target = e.currentTarget as HTMLImageElement;
+                        if (videoId) {
+                          if (target.src.endsWith('.webp')) {
+                            // If a .webp fails, try the .jpg equivalent
+                            target.src = target.src.replace('_webp', '').replace('.webp', '.jpg');
+                          } else if (target.src.includes('maxresdefault')) {
+                            target.src = `https://img.youtube.com/vi/${videoId}/sddefault.jpg`;
+                          } else if (target.src.includes('sddefault.jpg')) {
+                            target.src = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+                          } else {
+                            // Final fallback to whatever was in the database
+                            target.src = '/placeholder.png';
+                          }
+                        }
+                      }}
+                    />
+                    <div className="mt-2 text-sm text-center">
+                      <p>{marker.description}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-4">
           {course.chapters.map((ch: any) => (
             <div key={ch.id} id={ch.id} className="rounded border border-gray-200 p-4 dark:border-gray-800 scroll-mt-20 sepia:border-sepia-border">
@@ -1042,6 +1104,16 @@ export default function CourseDetailRoute() {
       </div>
     </div>
   );
+}
+
+function getYouTubeVideoId(url: string | null): string | null {
+  if (!url) return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  if (match && match[2].length === 11) {
+    return match[2];
+  }
+  return null;
 }
 
 function formatTime(sec?: number | null) {
