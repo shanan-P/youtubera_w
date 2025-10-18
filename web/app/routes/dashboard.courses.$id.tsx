@@ -68,6 +68,7 @@ interface Course {
     courseId: string;
     content: string;
     version: number;
+    mode: string;
     createdAt: Date | string;
   }>;
   videoMarkers: Array < {
@@ -494,7 +495,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           data: {
             courseId: id,
             content: result.text,
-            version: newVersion
+            version: newVersion,
+            mode: mode as string
           }
         });
 
@@ -510,16 +512,29 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       }
     }
 
-    case 'generateShort': {
-      const shortId = formData.get('shortId')?.toString();
-      if (!shortId) {
-        return json<ActionData>({ error: 'shortId not provided' }, { status: 400 });
+    case 'deleteVersion': {
+      const versionId = formData.get('versionId')?.toString();
+      const versionNumber = Number(formData.get('versionNumber'));
+
+      if (!versionId || !versionNumber) {
+        return json<ActionData>({ error: 'Version ID and number are required' }, { status: 400 });
       }
-      const result = await generateShortForEntry(shortId);
-      if (!result.ok) {
-        return json<ActionData>({ error: result.error }, { status: 500 });
+
+      try {
+        // Delete the formatted version
+        await prisma.formattedVersion.delete({
+          where: { id: versionId }
+        });
+
+        // Always redirect to original version after deletion
+        return redirect(`/dashboard/courses/${id}?version_deleted=${versionNumber}`);
+      } catch (error) {
+        console.error('Error deleting version:', error);
+        return json<ActionData>(
+          { error: 'Failed to delete version', details: error instanceof Error ? error.message : 'Unknown error' },
+          { status: 500 }
+        );
       }
-      return json<ActionData>({ success: true, message: 'Short generated successfully' });
     }
 
     default:
@@ -565,11 +580,13 @@ export default function CourseDetailRoute() {
   }, [searchParams]);
 
   const versionCreated = searchParams.get("version_created");
-  
+  const versionDeleted = searchParams.get("version_deleted");
+
   const isProcessing = navigation.state !== 'idle' &&
     (navigation.formData?.get('intent') === 'formatWithGemini' ||
      navigation.formData?.get('intent') === 'extract' ||
-     navigation.formData?.get('intent') === 're-extract');
+     navigation.formData?.get('intent') === 're-extract' ||
+     navigation.formData?.get('intent') === 'deleteVersion');
   const shortId = params.shortId as string | undefined;
   
   if ("error" in data) {
@@ -617,19 +634,28 @@ export default function CourseDetailRoute() {
       newSearchParams.delete("version_created");
       setSearchParams(newSearchParams, { replace: true });
     }
+    const versionDeletedFromUrl = searchParams.get("version_deleted");
+    if (versionDeletedFromUrl) {
+      // Always switch to original version after deletion
+      setSelectedVersion(0);
+      // Clean the URL
+      const newSearchParams = new URLSearchParams(searchParams);
+      newSearchParams.delete("version_deleted");
+      setSearchParams(newSearchParams, { replace: true });
+    }
   }, [searchParams, setSearchParams, isMounted, isTextBasedCourse, course.id]);
   
 
-  const handleVersionChange = (newVersion: number) => {
-    setSelectedVersion(newVersion);
-    if (newVersion === 0) {
-      setSelectedContent(course.textContent || "");
-    } else {
-      const versionContent = course.formattedVersions?.find(
-        (v: { version: number }) => v.version === newVersion
-      )?.content;
-      setSelectedContent(versionContent || course.textContent || "");
-    }
+  const handleVersionDelete = (versionId: string, versionNumber: number) => {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.innerHTML = `
+      <input type="hidden" name="intent" value="deleteVersion" />
+      <input type="hidden" name="versionId" value="${versionId}" />
+      <input type="hidden" name="versionNumber" value="${versionNumber}" />
+    `;
+    document.body.appendChild(form);
+    form.submit();
   };
 
   // Handle content updates when version changes
@@ -652,9 +678,9 @@ export default function CourseDetailRoute() {
     }
   }, [selectedVersion, course.textContent, course.formattedVersions, isTextBasedCourse, isMounted, course.id]);
   
-  const seekAudio = (time: number | null) => {
-    if (time !== null && audioRef.current) {
-      audioRef.current.currentTime = time;
+  const seekAudio = (timestamp: number) => {
+    if (audioRef.current) {
+      audioRef.current.currentTime = timestamp;
       audioRef.current.play();
     }
   };
@@ -798,8 +824,10 @@ export default function CourseDetailRoute() {
                   {isTextBasedCourse && (
                     <VersionSelector 
                       course={course} 
-                      onVersionChange={handleVersionChange}
+                      onVersionChange={setSelectedVersion}
                       selectedVersion={selectedVersion}
+                      onVersionDelete={handleVersionDelete}
+                      isProcessing={isProcessing}
                     />
                   )}
                 </div>
@@ -823,7 +851,7 @@ export default function CourseDetailRoute() {
                 </Form>
                 <Form method="post" className="flex items-center gap-2">
                   <input type="hidden" name="intent" value="formatWithGemini" />
-                  <input type="hidden" name="content" value={course.textContent} />
+                  <input type="hidden" name="content" value={course.textContent || ""} />
                   <input type="hidden" name="theme" value={theme} />
                   <Button
                     type="submit"
@@ -908,12 +936,14 @@ export default function CourseDetailRoute() {
                     content={selectedContent}
                     courseId={course.id}
                     key={selectedVersion}
+                    version={selectedVersion}
                   />
                   ) : (
                     <NotebookViewer
                       content={selectedContent}
                       courseId={course.id}
                       key={selectedVersion}
+                      version={selectedVersion}
                     />
                   )}
                 </div>

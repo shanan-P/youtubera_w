@@ -9,6 +9,7 @@ interface NotebookViewerProps {
   content: string;
   courseId?: string;
   title?: string;
+  version?: number;
 }
 
 type Heading = { id: string; text: string; level: number };
@@ -46,7 +47,8 @@ function computeHash(s: string): string {
 export function NotebookViewer({ 
   content, 
   courseId, 
-  title 
+  title,
+  version = 0
 }: NotebookViewerProps) {
   const { theme } = useTheme();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -59,7 +61,7 @@ export function NotebookViewer({
   const [progress, setProgress] = useState<number>(0);
   const [readingSec, setReadingSec] = useState<number>(0);
   const [tocOpen, setTocOpen] = useState<boolean>(false);
-  const storageKey = useMemo(() => (courseId ? `reader:${courseId}` : undefined), [courseId]);
+  const storageKey = useMemo(() => (courseId ? `reader:${courseId}:v${version || 0}` : undefined), [courseId, version]);
   const [pagesHtml, setPagesHtml] = useState<string[]>([]);
   const [pagesHeadings, setPagesHeadings] = useState<Heading[][]>([]);
   const [currentPage, setCurrentPage] = useState<number>(() => {

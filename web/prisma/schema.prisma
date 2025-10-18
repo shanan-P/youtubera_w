@@ -77,6 +77,7 @@ model FormattedVersion {
   course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
   content   String
   version   Int
+  mode      String   @default("original") // "original", "brief", "detail", "hinglish"
   createdAt DateTime @default(now())
 
   @@unique([courseId, version])
