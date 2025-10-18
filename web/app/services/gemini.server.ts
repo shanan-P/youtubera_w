@@ -152,7 +152,7 @@ function buildGeminiPrompt(chunk: string, mode: string, chunkNumber: number, tot
  * for consumption by the NotebookViewer component. It tries to break content at logical
  * points like paragraph breaks.
  */
-function paginateMarkdown(text: string, size: number = 4000): string {
+function paginateMarkdown(text: string, size: number = 2500): string {
   if (!text || text.length <= size) {
     return `<!-- PAGEBREAK:1 -->\n\n${text}`;
   }
@@ -204,27 +204,28 @@ export async function formatWithGemini(
     return { error: 'GEMINI_API_KEY is not configured' };
   }
 
-  // Split text into character-based chunks for more efficient processing
-  const CHARACTER_LIMIT = 10000; // Optimal chunk size for Gemini processing
-  const textChunks = splitTextIntoChunks(text, CHARACTER_LIMIT);
+  // First, paginate the content to preserve page structure
+  const paginatedContent = paginateMarkdown(text, 2500);
 
-  if (textChunks.length === 0) {
-    return { error: "No content to format after chunking." };
+  // Split the paginated content back into individual pages for formatting
+  const pageChunks = paginatedContent.split(/<!--\s*PAGEBREAK:\s*\d+\s*-->/gi).filter(chunk => chunk.trim());
+
+  if (pageChunks.length === 0) {
+    return { error: "No content to format after pagination." };
   }
 
-  const formattedChunks: string[] = [];
-  let chunkCounter = 1;
+  const formattedPages: string[] = [];
 
-  for (let i = 0; i < textChunks.length; i++) {
-    const chunk = textChunks[i];
-    const chunkNumber = chunkCounter++;
+  for (let i = 0; i < pageChunks.length; i++) {
+    const chunk = pageChunks[i];
+    const chunkNumber = i + 1;
 
     // Add a 2-second delay between chunks to stay within rate limits
     if (i > 0) {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    const prompt = buildGeminiPrompt(chunk, mode, chunkNumber, textChunks.length);
+    const prompt = buildGeminiPrompt(chunk, mode, chunkNumber, pageChunks.length);
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
     const requestBody = {
@@ -254,22 +255,21 @@ export async function formatWithGemini(
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`Gemini API error for chunk ${chunkNumber}:`, response.status, errorText);
+        console.error(`Gemini API error for page ${chunkNumber}:`, response.status, errorText);
 
         // Implement retry logic with backoff for 429 errors
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
           const retryDelay = retryAfter ? parseInt(retryAfter, 10) * 1000 : 30000; // Default to 30s
-          console.log(`Rate limited. Retrying chunk ${chunkNumber} in ${retryDelay / 1000} seconds...`);
+          console.log(`Rate limited. Retrying page ${chunkNumber} in ${retryDelay / 1000} seconds...`);
           await new Promise(resolve => setTimeout(resolve, retryDelay));
-          // Decrement i to retry the same chunk
+          // Decrement i to retry the same page
           i--;
-          chunkCounter--;
           continue;
         }
 
-        // Continue to next chunk even if one fails
-        formattedChunks.push(`--- Chunk ${chunkNumber} Formatting Failed ---`);
+        // Continue to next page even if one fails
+        formattedPages.push(`--- Page ${chunkNumber} Formatting Failed ---`);
         continue;
       }
 
@@ -277,24 +277,21 @@ export async function formatWithGemini(
       const formattedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
       if (formattedText) {
-        formattedChunks.push(formattedText);
+        formattedPages.push(formattedText);
       } else {
-        formattedChunks.push(`--- Chunk ${chunkNumber} Formatting Returned No Content ---`);
+        formattedPages.push(`--- Page ${chunkNumber} Formatting Returned No Content ---`);
       }
 
     } catch (error) {
-      console.error(`Error formatting chunk ${chunkNumber}:`, error);
-      formattedChunks.push(`--- Chunk ${chunkNumber} Formatting Failed with exception ---`);
+      console.error(`Error formatting page ${chunkNumber}:`, error);
+      formattedPages.push(`--- Page ${chunkNumber} Formatting Failed with exception ---`);
     }
   }
 
-  // Join the formatted chunks into a single markdown string
-  const fullMarkdown = formattedChunks.join('\n\n');
+  // Join the formatted pages back with PAGEBREAK markers
+  const fullMarkdown = formattedPages.map((page, idx) => `<!-- PAGEBREAK:${idx + 1} -->\n\n${page}`).join('\n\n');
 
-  // Paginate the final content based on character count for the viewer
-  const paginatedContent = paginateMarkdown(fullMarkdown);
-
-  return { text: paginatedContent };
+  return { text: fullMarkdown };
 }
 
 

@@ -101,11 +101,54 @@ export function NotebookViewer({
   const [showTop, setShowTop] = useState<boolean>(false);
 
   // Build pages from markdown using <!-- PAGEBREAK:n --> markers (backend)
-  // If no markers exist, fall back to a single page.
+  // If no markers exist, fall back to creating pages based on content length
   useEffect(() => {
     const processMarkdown = async (): Promise<void> => {
       if (!content) return;
       let md = content || '';
+
+      // Check if content has PAGEBREAK markers
+      const hasPageBreaks = /<!--\s*PAGEBREAK:\s*\d+\s*-->/i.test(md);
+
+      if (!hasPageBreaks) {
+        // If no PAGEBREAK markers, create them based on content length for better UX
+        // Split content into chunks of approximately 2500 characters
+        const chunkSize = 2500;
+        const chunks: string[] = [];
+        let currentPos = 0;
+
+        while (currentPos < md.length) {
+          let endPos = Math.min(currentPos + chunkSize, md.length);
+          let chunk = md.slice(currentPos, endPos);
+
+          // Try to find a good break point (paragraph, sentence, or line break)
+          if (endPos < md.length) {
+            const searchStart = Math.max(currentPos + chunkSize * 0.7, currentPos);
+            const paragraphBreak = md.lastIndexOf('\n\n', endPos);
+            const lineBreak = md.lastIndexOf('\n', endPos);
+            const sentenceBreak = md.lastIndexOf('. ', endPos);
+
+            const bestBreak = Math.max(paragraphBreak, lineBreak, sentenceBreak);
+
+            if (bestBreak > searchStart) {
+              chunk = md.slice(currentPos, bestBreak + (paragraphBreak === bestBreak ? 2 : lineBreak === bestBreak ? 1 : 2));
+              currentPos = bestBreak + (paragraphBreak === bestBreak ? 2 : lineBreak === bestBreak ? 1 : 2);
+            } else {
+              currentPos = endPos;
+            }
+          } else {
+            currentPos = endPos;
+          }
+
+          if (chunk.trim()) {
+            chunks.push(chunk.trim());
+          }
+        }
+
+        // Add PAGEBREAK markers to chunks
+        md = chunks.map((chunk, idx) => `<!-- PAGEBREAK:${idx + 1} -->\n\n${chunk}`).join('\n\n');
+      }
+
       // If content does not start with a PAGEBREAK, prepend PAGEBREAK:1 so title and intro belong to page 1
       if (!/^\s*<!--\s*PAGEBREAK:\s*\d+\s*-->/i.test(md)) {
         md = `<!-- PAGEBREAK:1 -->\n${md}`;
@@ -253,49 +296,15 @@ export function NotebookViewer({
     }
   }, [currentPage]);
 
-  // Scroll handling
+  // Scroll handling for back-to-top button
   useEffect(() => {
-    const root = rootRef.current;
-    if (!root) {
-      return;
-    }
-
-    let scrollTimeout: any;
-
     const handleScroll = () => {
-      if (scrollTimeout) clearTimeout(scrollTimeout);
-      scrollTimeout = setTimeout(() => {
-        const { scrollTop, scrollHeight, clientHeight } = root;
-        if (scrollHeight <= clientHeight) {
-          setProgress(100);
-          return;
-        }
-        const pct = (scrollTop / (scrollHeight - clientHeight)) * 100;
-        setProgress(pct);
-
-        // Update active heading
-        let bestId = '';
-        let bestY = -Infinity;
-        for (const h of headings) {
-          const el = document.getElementById(h.id);
-          if (el) {
-            const y = el.getBoundingClientRect().top;
-            if (y < 100 && y > bestY) {
-              bestY = y;
-              bestId = h.id;
-            }
-          }
-        }
-        setActiveId(bestId);
-      }, 100);
+      setShowTop(window.scrollY > 200);
     };
 
-    root.addEventListener('scroll', handleScroll, { passive: true });
-    return () => {
-      root.removeEventListener('scroll', handleScroll);
-      if (scrollTimeout) clearTimeout(scrollTimeout);
-    };
-  }, [headings]);
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // Save/restore state
   useEffect(() => {
@@ -611,6 +620,64 @@ export function NotebookViewer({
                 />
             )}
           </div>
+
+          {/* Bottom Navigation */}
+          {totalPages > 1 && (
+            <div className="relative z-20 flex flex-wrap items-center justify-center gap-3 rounded border border-subtle-border bg-paper p-3 text-xs sepia:border-sepia-border sepia:bg-sepia mt-4">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - (bookMode ? 2 : 1)))}
+                  disabled={currentPage <= 1}
+                  title="Previous page"
+                >
+                  ◀ Prev
+                </Button>
+                <div className="p-2 flex items-center gap-1">
+                  <span>Page</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={totalPages}
+                    value={currentPage}
+                    onChange={(e) => {
+                      const page = parseInt(e.target.value, 10);
+                      if (page >= 1 && page <= totalPages) {
+                        setCurrentPage(page);
+                      }
+                    }}
+                    onBlur={(e) => { // handle case where user leaves input empty
+                      if (!e.target.value) {
+                        setCurrentPage(1);
+                      }
+                    }}
+                    className="w-full max-w-xs text-center rounded border border-subtle-border bg-paper"
+                  />
+                  <span>/ {totalPages}</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + (bookMode ? 2 : 1)))}
+                  disabled={bookMode ? currentPage + 1 >= totalPages : currentPage >= totalPages}
+                  title="Next page"
+                >
+                  Next ▶
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                  title="Back to top"
+                >
+                  ↑ Top
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -619,10 +686,10 @@ export function NotebookViewer({
           variant="primary"
           size="sm"
           onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          className="fixed bottom-20 right-6 z-40 rounded-full !px-3 !py-2 text-white shadow-lg lg:bottom-6"
+          className="fixed bottom-20 right-6 z-50 rounded-full !px-4 !py-3 text-white shadow-lg hover:shadow-xl transition-all duration-200 lg:bottom-6"
           title="Back to top"
         >
-          ↑ Top
+          ↑
         </Button>
       )}
     </div>
