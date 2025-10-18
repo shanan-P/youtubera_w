@@ -24,6 +24,130 @@ if (!GEMINI_API_KEY) {
 }
 
 /**
+ * Splits text into chunks based on character limit while preserving word boundaries
+ */
+function splitTextIntoChunks(text: string, characterLimit: number): string[] {
+  if (!text || text.length <= characterLimit) {
+    return [text];
+  }
+
+  const chunks: string[] = [];
+  let startIndex = 0;
+
+  while (startIndex < text.length) {
+    let endIndex = startIndex + characterLimit;
+
+    // If we're not at the end of the text, find the last complete word boundary
+    if (endIndex < text.length) {
+      // Look for the last space, newline, or sentence end within the limit
+      let lastBoundary = endIndex;
+
+      // Search backwards for word boundaries
+      for (let i = endIndex; i > startIndex && i > startIndex + characterLimit * 0.8; i--) {
+        if (text[i] === '\n' || text[i] === ' ' || text[i] === '.' || text[i] === '!' || text[i] === '?') {
+          lastBoundary = i + 1; // Include the boundary character
+          break;
+        }
+      }
+
+      endIndex = Math.min(lastBoundary, text.length);
+    } else {
+      endIndex = text.length;
+    }
+
+    const chunk = text.slice(startIndex, endIndex).trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+
+    startIndex = endIndex;
+  }
+
+  return chunks;
+}
+
+/**
+ * Builds the Gemini prompt for a specific chunk
+ */
+function buildGeminiPrompt(chunk: string, mode: string, chunkNumber: number, totalChunks: number): string {
+  let promptAction;
+  switch (mode) {
+    case 'brief':
+      promptAction = 'Please format and **briefly summarize** the following text';
+      break;
+    case 'detail':
+      promptAction = 'Please format and **add detail to** the following text';
+      break;
+    case 'hinglish':
+      promptAction = 'Please format the following text and **convert it to Hinglish** (Hindi-English mix) for better understanding. Use Hindi words where appropriate while keeping technical terms in English. **DO NOT convert code blocks, function definitions, or programming syntax** - keep them exactly as they are in English. Only convert explanatory text, descriptions, and comments to Hinglish';
+      break;
+    case 'original':
+    default:
+      promptAction = 'Please format the following text';
+      break;
+  }
+
+  return [
+    `${promptAction} (chunk ${chunkNumber} of ${totalChunks}) into clean, well-structured markdown. Follow these instructions carefully:`,
+    '',
+    '- **Content & Structure:**',
+    '  - The text may contain repeating headers and footers on each page (e.g., \'Laying the Foundation! (Namaste-React) 1\'). Remove these.',
+    '  - Preserve the original sequence of paragraphs and content.',
+    '  - Correct any spelling mistakes.',
+    '  - Split PascalCase words into separate words (e.g., "PascalCase" becomes "Pascal Case").',
+    '  - Do not add any introductory or concluding text that is not part of the original content.',
+    '',
+    '- **Styling & Formatting:**',
+    '  - Use markdown headings (#, ##, ###) for titles and subtitles.',
+    '  - Use bold (**text**) for emphasis on key terms and file names.',
+    '  - Use inline code formatting (`code`) for variable names and short code snippets.',
+    '  - Format multi-line code blocks with appropriate language identifiers (e.g., ```javascript ... ```).',
+    '  - Preserve lists and format them correctly as bulleted or numbered lists.',
+    '  - Format questions (often starting with \'Q )\') as a bolded heading, with the answer on a new line.',
+    '  - Format notes (often starting with 💡 or 📢 NOTE:) as markdown blockquotes (>).',
+    '',
+    ...(mode === 'hinglish' ? [
+      '- **Hinglish Conversion:**',
+      '  - If asked to **convert to Hinglish**, translate the entire content to Hindi-English mix while preserving all technical terms in English.',
+      '  - **DO NOT convert code blocks, function definitions, class definitions, or any programming syntax** - keep them exactly as they are in English.',
+      '  - Keep all code examples, algorithms, and technical content in their original form.',
+      '  - Maintain all section headings, bullet points, and formatting structure.',
+      '  - Use Hindi words for descriptive text, explanations, and conclusions while keeping programming terms in English.',
+      '  - Do not summarize or omit any content - convert everything to Hinglish while preserving completeness.',
+      '  - Code blocks (marked with ```) should remain completely unchanged in English.',
+      '',
+    ] : mode === 'brief' ? [
+      '- **Brief Mode:**',
+      '  - Provide a concise summary of the content, keeping the essence and key points.',
+      '  - Remove unnecessary details while preserving core concepts.',
+      '',
+    ] : mode === 'detail' ? [
+      '- **Detail Mode:**',
+      '  - Expand on the content with additional context and explanations.',
+      '  - For questions, provide comprehensive answers.',
+      '  - For stories and examples, add appropriate depth and background.',
+      '',
+    ] : []),
+    '- **Special Characters & Encoding:**',
+    '  - Preserve all original special characters, symbols (e.g., 🚀, 💡, 📢), and unicode characters. Ensure they are rendered correctly in markdown.',
+    '  - Some characters like  might be rendering artifacts. If a character seems out of place, try to interpret its meaning or remove it if it adds no value.',
+    '  - Do not include page numbers in the output.',
+    '',
+    '- **Output:**',
+    '  - Ensure the output is only valid markdown.',
+    '  - This is chunk ' + chunkNumber + ' of ' + totalChunks + '. Process only this portion.',
+    '',
+    'Here is the text chunk:',
+    '---',
+    chunk
+  ].join('\n');
+}
+
+
+
+
+
+/**
  * Paginates a markdown string by a given character size, inserting page break markers
  * for consumption by the NotebookViewer component. It tries to break content at logical
  * points like paragraph breaks.
@@ -39,9 +163,9 @@ function paginateMarkdown(text: string, size: number = 4000): string {
 
   while (remainingText.length > 0) {
     resultChunks.push(`<!-- PAGEBREAK:${pageCounter} -->`);
-    
+
     let splitPos = Math.min(remainingText.length, size);
-    
+
     if (remainingText.length > size) {
       let tempSplitPos = remainingText.lastIndexOf('\n\n', size);
       if (tempSplitPos > size / 2) {
@@ -53,7 +177,7 @@ function paginateMarkdown(text: string, size: number = 4000): string {
         }
       }
     }
-    
+
     const chunk = remainingText.substring(0, splitPos);
     resultChunks.push(chunk);
     remainingText = remainingText.substring(splitPos).trim();
@@ -66,10 +190,9 @@ function paginateMarkdown(text: string, size: number = 4000): string {
 
 
 
-
 export async function formatWithGemini(
   text: string,
-  mode: 'brief' | 'detail' | 'original',
+  mode: 'brief' | 'detail' | 'original' | 'hinglish',
   options: { maxRetries?: number; initialDelay?: number } = {}
 ): Promise<{ text?: string; error?: string }> {
   if (!text) {
@@ -81,79 +204,27 @@ export async function formatWithGemini(
     return { error: 'GEMINI_API_KEY is not configured' };
   }
 
-  // Split the text by page breaks
-  const pageChunks = text.split(/<!-- PAGEBREAK:\d+ -->/g).map(s => s.trim()).filter(Boolean);
+  // Split text into character-based chunks for more efficient processing
+  const CHARACTER_LIMIT = 10000; // Optimal chunk size for Gemini processing
+  const textChunks = splitTextIntoChunks(text, CHARACTER_LIMIT);
 
-  if (pageChunks.length === 0) {
-    return { error: "No content to format after splitting by page breaks." };
+  if (textChunks.length === 0) {
+    return { error: "No content to format after chunking." };
   }
 
-  const formattedPages: string[] = [];
-  let pageCounter = 1;
-  const chunkSize = 5; // Process 5 pages at a time
+  const formattedChunks: string[] = [];
+  let chunkCounter = 1;
 
-  for (let i = 0; i < pageChunks.length; i += chunkSize) {
-    const chunkGroup = pageChunks.slice(i, i + chunkSize);
-    const startPage = pageCounter;
-    const endPage = pageCounter + chunkGroup.length - 1;
+  for (let i = 0; i < textChunks.length; i++) {
+    const chunk = textChunks[i];
+    const chunkNumber = chunkCounter++;
 
-    // Add a 4-second delay to stay within the 15 requests/minute limit for the free tier
-    await new Promise(resolve => setTimeout(resolve, 4000));
-
-    const combinedChunk = chunkGroup.join('\n\n');
-
-    let promptAction;
-    switch (mode) {
-      case 'brief':
-        promptAction = 'Please format and **briefly summarize** the following text';
-        break;
-      case 'detail':
-        promptAction = 'Please format and **add detail to** the following text';
-        break;
-      case 'original':
-      default:
-        promptAction = 'Please format the following text';
-        break;
+    // Add a 2-second delay between chunks to stay within rate limits
+    if (i > 0) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
-    const prompt = [
-      `${promptAction} from pages`,
-      `${startPage}-${endPage}`,
-      'of a document into clean, well-structured markdown. Follow these instructions carefully:',
-      '',
-      '- **Content & Structure:**',
-      '  - The text may contain repeating headers and footers on each page (e.g., \'Laying the Foundation! (Namaste-React) 1\'). Remove these.',
-      '  - Preserve the original sequence of paragraphs and content.',
-      '  - Correct any spelling mistakes.',
-      '  - Split PascalCase words into separate words (e.g., "PascalCase" becomes "Pascal Case").',
-      '  - Do not add any introductory or concluding text that is not part of the original content.',
-      '',
-      '- **Styling & Formatting:**',
-      '  - Use markdown headings (#, ##, ###) for titles and subtitles.',
-      '  - Use bold (**text**) for emphasis on key terms and file names.',
-      '  - Use inline code formatting (`code`) for variable names and short code snippets.',
-      '  - Format multi-line code blocks with appropriate language identifiers (e.g., ```javascript ... ```).',
-      '  - Preserve lists and format them correctly as bulleted or numbered lists.',
-      '  - Format questions (often starting with \'Q )\') as a bolded heading, with the answer on a new line.',
-      '  - Format notes (often starting with 💡 or 📢 NOTE:) as markdown blockquotes (>).',
-      '',
-      '- **Brief vs. Detail:**',
-      '  - If asked to **brief**, provide a concise summary of the content, keeping the essence and key points.',
-      '  - If asked to **add detail**, expand on the content. For questions, add answers. For stories, add appropriate context and length.',
-      '  - If just asked to **format**, keep the original content length and meaning.',
-      '',
-      '- **Special Characters & Encoding:**',
-      '  - Preserve all original special characters, symbols (e.g., 🚀, 💡, 📢), and unicode characters. Ensure they are rendered correctly in markdown.',
-      '  - Some characters like  might be rendering artifacts. If a character seems out of place, try to interpret its meaning or remove it if it adds no value.',
-      '  - Do not include page numbers in the output.',
-      '',
-      '- **Output:**',
-      '  - Ensure the output is only valid markdown.',
-      '',
-      `Here is the text from pages ${startPage}-${endPage}:`,
-      '---',
-      combinedChunk
-    ].join('\n');
+    const prompt = buildGeminiPrompt(chunk, mode, chunkNumber, textChunks.length);
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
     const requestBody = {
@@ -183,22 +254,22 @@ export async function formatWithGemini(
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`Gemini API error for pages ${startPage}-${endPage}:`, response.status, errorText);
-        
+        console.error(`Gemini API error for chunk ${chunkNumber}:`, response.status, errorText);
+
         // Implement retry logic with backoff for 429 errors
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
-          const retryDelay = retryAfter ? parseInt(retryAfter, 10) * 1000 : 60000; // Default to 60s
-          console.log(`Rate limited. Retrying pages ${startPage}-${endPage} in ${retryDelay / 1000} seconds...`);
+          const retryDelay = retryAfter ? parseInt(retryAfter, 10) * 1000 : 30000; // Default to 30s
+          console.log(`Rate limited. Retrying chunk ${chunkNumber} in ${retryDelay / 1000} seconds...`);
           await new Promise(resolve => setTimeout(resolve, retryDelay));
           // Decrement i to retry the same chunk
-          i -= chunkSize;
-          pageCounter -= chunkGroup.length; // also decrement pageCounter
+          i--;
+          chunkCounter--;
           continue;
         }
 
         // Continue to next chunk even if one fails
-        formattedPages.push(`--- Pages ${startPage}-${endPage} Formatting Failed ---`);
+        formattedChunks.push(`--- Chunk ${chunkNumber} Formatting Failed ---`);
         continue;
       }
 
@@ -206,20 +277,19 @@ export async function formatWithGemini(
       const formattedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
       if (formattedText) {
-        formattedPages.push(formattedText);
+        formattedChunks.push(formattedText);
       } else {
-        formattedPages.push(`--- Pages ${startPage}-${endPage} Formatting Returned No Content ---`);
+        formattedChunks.push(`--- Chunk ${chunkNumber} Formatting Returned No Content ---`);
       }
 
     } catch (error) {
-      console.error(`Error formatting pages ${startPage}-${endPage}:`, error);
-      formattedPages.push(`--- Pages ${startPage}-${endPage} Formatting Failed with exception ---`);
+      console.error(`Error formatting chunk ${chunkNumber}:`, error);
+      formattedChunks.push(`--- Chunk ${chunkNumber} Formatting Failed with exception ---`);
     }
-    pageCounter += chunkGroup.length;
   }
 
-  // Join the formatted pages into a single markdown string
-  const fullMarkdown = formattedPages.join('\n\n');
+  // Join the formatted chunks into a single markdown string
+  const fullMarkdown = formattedChunks.join('\n\n');
 
   // Paginate the final content based on character count for the viewer
   const paginatedContent = paginateMarkdown(fullMarkdown);

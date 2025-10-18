@@ -471,7 +471,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     case 'formatWithGemini': {
       try {
         const content = formData.get('content')?.toString();
-        const mode = formData.get('mode')?.toString() as 'brief' | 'detail' | 'original' || 'original';
+        const mode = formData.get('mode')?.toString() as 'brief' | 'detail' | 'original' | 'hinglish' || 'original';
         if (!content) {
           return json<ActionData>({ error: 'No content provided to format' }, { status: 400 });
         }
@@ -823,7 +823,7 @@ export default function CourseDetailRoute() {
                 </Form>
                 <Form method="post" className="flex items-center gap-2">
                   <input type="hidden" name="intent" value="formatWithGemini" />
-                  <input type="hidden" name="content" value={selectedContent} />
+                  <input type="hidden" name="content" value={course.textContent} />
                   <input type="hidden" name="theme" value={theme} />
                   <Button
                     type="submit"
@@ -875,6 +875,24 @@ export default function CourseDetailRoute() {
                       </span>
                     ) : (
                       "Detail"
+                    )}
+                  </Button>
+                  <Button
+                    type="submit"
+                    name="mode"
+                    value="hinglish"
+                    variant="primary"
+                    size="sm"
+                    className="bg-orange-600 hover:bg-orange-700"
+                    disabled={isProcessing || !(selectedContent || course.textContent)}
+                  >
+                    {isProcessing && navigation.formData?.get('intent') === 'formatWithGemini' && navigation.formData?.get('mode') === 'hinglish' ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        Converting to Hinglish...
+                      </span>
+                    ) : (
+                      "Hinglish"
                     )}
                   </Button>
                 </Form>
