@@ -6,13 +6,13 @@ This repository contains the source code for the `youtubera_w` project, which in
 - `/web`: A Remix web application.
 - `/scripts`: Helper scripts.
 
-Create Env File and set DATABASE_URL, REDIS_URL, API Keys
+Create Env File and set DATABASE_URL, REDIS_URL, API Keys:
 
 Optionally install ffmpeg, yt-dlp
 
 Database Sync & App Run:
-npx prisma db push
-npx prisma generate
+npx prisma db push:
+npx prisma generate:
 
 npm run dev
 
